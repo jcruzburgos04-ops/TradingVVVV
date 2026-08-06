@@ -68,6 +68,15 @@ async function main() {
       window.App.chart.setTheme(t);
     }
   }
+  // Esta copia se publica en un entorno que bloquea las conexiones externas,
+  // así que arranca en modo simulado y con el cartel amarillo bien visible.
+  // Se apaga desde Fuentes de datos.
+  try {
+    if (!localStorage.getItem('librecharts.v4')) {
+      localStorage.setItem('librecharts.v4', JSON.stringify({ demo: true }));
+    }
+  } catch (e) { }
+
   document.addEventListener('DOMContentLoaded', function () {
     document.body.className = 'theme-' + hostTheme();
     setTimeout(function () { apply(hostTheme()); }, 400);

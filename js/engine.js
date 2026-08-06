@@ -11,14 +11,14 @@
       up: '#26a69a', down: '#ef5350', border: '#2a2e39', axisBg: '#131722',
       crossLine: '#758696', crossLabelBg: '#363a45', crossLabelFg: '#ffffff',
       watermark: 'rgba(120,123,134,0.09)', selection: '#2962ff',
-      areaLine: '#2962ff', sepLine: '#2a2e39'
+      areaLine: '#2962ff', sepLine: '#2a2e39', resizeHot: 'rgba(41,98,255,0.55)'
     },
     light: {
       bg: '#ffffff', grid: '#f0f3fa', gridStrong: '#e4e8f0', text: '#787b86', textStrong: '#131722',
       up: '#26a69a', down: '#ef5350', border: '#e0e3eb', axisBg: '#ffffff',
       crossLine: '#9598a1', crossLabelBg: '#4c525e', crossLabelFg: '#ffffff',
       watermark: 'rgba(80,83,94,0.08)', selection: '#2962ff',
-      areaLine: '#2962ff', sepLine: '#e0e3eb'
+      areaLine: '#2962ff', sepLine: '#e0e3eb', resizeHot: 'rgba(41,98,255,0.55)'
     }
   };
 
@@ -29,6 +29,13 @@
 
   var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   var FIB_COLORS = ['#787b86', '#f23645', '#ff9800', '#4caf50', '#089981', '#00bcd4', '#787b86'];
+
+  // Clics que necesita cada herramienta para quedar definida.
+  var TOOL_POINTS = {
+    trend: 2, ray: 2, extline: 2, rect: 2, ellipse: 2, arrow: 2, fib: 2,
+    ruler: 2, position: 2, channel: 3,
+    hline: 1, hray: 1, vline: 1, text: 1
+  };
 
   // ---------- utilidades ----------
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
@@ -80,21 +87,65 @@
   }
 
   // ---------- escala Y de un panel ----------
-  function Scale(min, max, top, h, padTop, padBot) {
-    this.min = min; this.max = max;
+  /* Trabaja en "espacio transformado": normal, logarítmico o porcentaje.
+     El resto del motor le pasa precios y no se entera del modo. */
+  function Scale(min, max, top, h, padTop, padBot, opts) {
+    opts = opts || {};
+    this.mode = opts.mode || 'normal';
+    this.base = opts.base || null;
+    this.flip = !!opts.flip;
+    if (this.mode === 'log' && (min <= 0 || max <= 0)) this.mode = 'normal';
+    if (this.mode === 'percent' && !this.base) this.mode = 'normal';
+
+    this.pmin = min; this.pmax = max;
+    this.tmin = this.tf(min); this.tmax = this.tf(max);
     this.top = top; this.h = h;
     this.pt = padTop == null ? 8 : padTop;
     this.pb = padBot == null ? 8 : padBot;
   }
+  Scale.prototype.tf = function (v) {
+    if (this.mode === 'log') return Math.log(Math.max(v, 1e-12));
+    if (this.mode === 'percent') return (v / this.base - 1) * 100;
+    return v;
+  };
+  Scale.prototype.itf = function (t) {
+    if (this.mode === 'log') return Math.exp(t);
+    if (this.mode === 'percent') return this.base * (1 + t / 100);
+    return t;
+  };
   Scale.prototype.y = function (v) {
     var inner = this.h - this.pt - this.pb;
-    if (this.max === this.min) return this.top + this.pt + inner / 2;
-    return this.top + this.pt + (this.max - v) / (this.max - this.min) * inner;
+    if (this.tmax === this.tmin) return this.top + this.pt + inner / 2;
+    var f = (this.tmax - this.tf(v)) / (this.tmax - this.tmin);
+    if (this.flip) f = 1 - f;
+    return this.top + this.pt + f * inner;
   };
   Scale.prototype.invert = function (py) {
     var inner = this.h - this.pt - this.pb;
-    if (inner <= 0) return this.min;
-    return this.max - (py - this.top - this.pt) / inner * (this.max - this.min);
+    if (inner <= 0) return this.pmin;
+    var f = (py - this.top - this.pt) / inner;
+    if (this.flip) f = 1 - f;
+    return this.itf(this.tmax - f * (this.tmax - this.tmin));
+  };
+  // Precios donde conviene poner una línea de la grilla.
+  Scale.prototype.ticks = function (approx) {
+    var out = [];
+    if (this.mode === 'log') {
+      // En logarítmica leen mejor los valores redondos 1 / 2 / 5 por década.
+      var e0 = Math.floor(Math.log10(this.pmin)), e1 = Math.ceil(Math.log10(this.pmax));
+      for (var e = e0; e <= e1; e++) {
+        for (var mi = 0; mi < 3; mi++) {
+          var v = [1, 2, 5][mi] * Math.pow(10, e);
+          if (v >= this.pmin && v <= this.pmax) out.push(v);
+        }
+      }
+      if (out.length >= 3) return out;
+      out = [];
+    }
+    var step = niceStep((this.tmax - this.tmin) / Math.max(2, approx));
+    var start = Math.ceil(this.tmin / step) * step;
+    for (var t = start; t <= this.tmax + step * 0.001; t += step) out.push(this.itf(t));
+    return out;
   };
 
   // ---------- gráfico ----------
@@ -115,21 +166,35 @@
     this.ctx = this.canvas.getContext('2d');
     this.octx = this.overlay.getContext('2d');
 
-    // estado de datos
+    // datos
     this.candles = [];
-    this.display = [];        // velas mostradas (Heikin Ashi transforma)
+    this.active = [];
+    this.display = [];
     this.symbol = '';
     this.interval = '1h';
     this.intervalMs = 3600e3;
     this.type = 'candles';
     this.decimals = 2;
     this.dataVersion = 0;
+    this.replayAt = null;
 
-    // estado de vista
+    // presentación
+    this.tz = 'America/Argentina/Buenos_Aires';
+    this.scaleMode = 'normal';
+    this.flipScale = false;
+    this.showGrid = true;
+    this.showWatermark = true;
+    this.showLastLine = true;
+    this.showCountdown = true;
+    this.precision = null;
+    this.colors = { up: null, down: null };
+
+    // vista
     this.barW = 8;
     this.rightIndex = 0;
     this.scaleW = 78;
     this.axisH = 30;
+    this.paneSizes = {};
 
     // indicadores
     this.indicators = [];
@@ -140,14 +205,20 @@
     this.tool = 'cursor';
     this.selection = null;
     this._drawState = null;
-    this.magnet = false;      // pegar los puntos a O/H/L/C de la vela
-    this._undo = [];          // pilas de deshacer / rehacer
+    this.magnet = 'off';          // 'off' | 'weak' | 'strong'
+    this.keepDrawing = false;
+    this.drawingsLocked = false;
+    this.drawingsHidden = false;
+    this.drawStyle = { color: '#2962ff', width: 2, dash: null };
+    this._undo = [];
     this._redo = [];
 
     // interacción
     this._mouse = null;
     this._pan = null;
     this._pinch = null;
+    this._resizePane = null;
+    this._dragDraw = null;
     this._dirty = false;
     this._layoutSig = '';
     this._paneRects = [];
@@ -166,6 +237,11 @@
       requestAnimationFrame(self._raf);
     };
     requestAnimationFrame(this._raf);
+
+    // La cuenta regresiva de la vela necesita repintar cada segundo.
+    setInterval(function () {
+      if (self.showCountdown && self.active.length && self.intervalMs < 86400e3) self.requestRender();
+    }, 1000);
   }
 
   Chart.prototype.requestRender = function () { this._dirty = true; };
@@ -179,22 +255,32 @@
     return PALETTE[this._colorIdx++ % PALETTE.length];
   };
 
+  Chart.prototype.upColor = function () { return this.colors.up || this.theme.up; };
+  Chart.prototype.downColor = function () { return this.colors.down || this.theme.down; };
+
+  // Fecha desplazada a la zona horaria elegida: después se lee con getUTC*.
+  Chart.prototype._d = function (ms) {
+    var off = 0;
+    if (TV.Market && this.tz && this.tz !== 'UTC') {
+      try { off = TV.Market.tzOffset(this.tz, ms); } catch (e) { off = 0; }
+    }
+    return new Date(ms + off);
+  };
+
   // ---------- datos ----------
   Chart.prototype.setData = function (candles, symbol, interval, intervalMs) {
     this.candles = candles || [];
     this.symbol = symbol || this.symbol;
     this.interval = interval || this.interval;
     this.intervalMs = intervalMs || this.intervalMs;
+    this.replayAt = null;
     this.dataVersion++;
     this._hasMoreHistory = true;
     this._loadingHistory = false;
     var last = this.candles[this.candles.length - 1];
-    this.decimals = last ? decimalsFor(last.close) : 2;
+    this.decimals = this.precision != null ? this.precision : (last ? decimalsFor(last.close) : 2);
     this._rebuildDisplay();
-    var plotW = this._plotW();
-    this.barW = clamp(plotW / Math.max(60, Math.min(180, this.candles.length)), 2, 20);
-    this.rightIndex = this.candles.length - 1 + Math.max(4, Math.round(plotW / this.barW * 0.06));
-    this.requestRender();
+    this.resetView();
   };
 
   Chart.prototype.prepend = function (older) {
@@ -203,6 +289,7 @@
     var add = older.filter(function (k) { return k.time < firstT; });
     if (!add.length) { this._hasMoreHistory = false; return; }
     this.candles = add.concat(this.candles);
+    if (this.replayAt != null) this.replayAt += add.length;
     this.rightIndex += add.length;
     this.dataVersion++;
     this._rebuildDisplay();
@@ -210,6 +297,7 @@
   };
 
   Chart.prototype.mergeLive = function (k) {
+    if (this.replayAt != null) return;   // en reproducción no entran datos nuevos
     var n = this.candles.length;
     if (!n) return;
     var last = this.candles[n - 1];
@@ -219,20 +307,22 @@
       var pinned = this.rightIndex >= n - 1;
       this.candles.push(k);
       if (pinned) this.rightIndex += 1;
-    } else {
-      return; // vela antigua, ignorar
-    }
+    } else return;
     this.dataVersion++;
     this._rebuildDisplay();
     this.requestRender();
   };
 
   Chart.prototype._rebuildDisplay = function () {
-    var c = this.candles;
-    if (this.type !== 'heikin') { this.display = c; return; }
-    var out = new Array(c.length), po = null, pc = null;
-    for (var i = 0; i < c.length; i++) {
-      var k = c[i];
+    var src = this.replayAt != null
+      ? this.candles.slice(0, Math.max(1, Math.min(this.replayAt + 1, this.candles.length)))
+      : this.candles;
+    this.active = src;
+
+    if (this.type !== 'heikin') { this.display = src; return; }
+    var out = new Array(src.length), po = null, pc = null;
+    for (var i = 0; i < src.length; i++) {
+      var k = src[i];
       var hc = (k.open + k.high + k.low + k.close) / 4;
       var ho = i === 0 ? (k.open + k.close) / 2 : (po + pc) / 2;
       out[i] = {
@@ -249,6 +339,38 @@
     this.type = t;
     this._rebuildDisplay();
     this.requestRender();
+  };
+
+  Chart.prototype.setScaleMode = function (m) { this.scaleMode = m; this.requestRender(); };
+  Chart.prototype.setTimezone = function (tz) { this.tz = tz; this.requestRender(); };
+
+  // ---------- reproducción de barras ----------
+  Chart.prototype.startReplay = function (idx) {
+    if (!this.candles.length) return;
+    this.replayAt = clamp(idx == null ? Math.floor(this.candles.length * 0.7) : idx,
+      10, this.candles.length - 1);
+    this.dataVersion++;
+    this._rebuildDisplay();
+    this.requestRender();
+    if (this.opts.onReplay) this.opts.onReplay(this.replayAt, this.candles.length);
+  };
+  Chart.prototype.stepReplay = function (n) {
+    if (this.replayAt == null) return false;
+    var atEnd = this.replayAt + (n || 1) >= this.candles.length - 1;
+    this.replayAt = Math.min(this.replayAt + (n || 1), this.candles.length - 1);
+    this.dataVersion++;
+    this._rebuildDisplay();
+    this.rightIndex = this.active.length - 1 + Math.max(4, Math.round(this._plotW() / this.barW * 0.06));
+    this.requestRender();
+    if (this.opts.onReplay) this.opts.onReplay(this.replayAt, this.candles.length);
+    return !atEnd;
+  };
+  Chart.prototype.stopReplay = function () {
+    this.replayAt = null;
+    this.dataVersion++;
+    this._rebuildDisplay();
+    this.requestRender();
+    if (this.opts.onReplay) this.opts.onReplay(null, this.candles.length);
   };
 
   // ---------- indicadores ----------
@@ -272,8 +394,6 @@
   };
   Chart._seq = 0;
 
-  // Rehace la disposición de paneles y avisa a la interfaz: cualquier cambio en
-  // la lista de indicadores pasa por aquí, así la leyenda nunca se desincroniza.
   Chart.prototype._indChanged = function () {
     this.resize();
     if (this.opts.onIndicatorsChange) this.opts.onIndicatorsChange();
@@ -297,11 +417,13 @@
 
   Chart.prototype.removeIndicator = function (id) {
     this.indicators = this.indicators.filter(function (i) { return i.id !== id; });
+    delete this.paneSizes[id];
     this._indChanged();
   };
 
   Chart.prototype.clearIndicators = function () {
     this.indicators = [];
+    this.paneSizes = {};
     this._indChanged();
   };
 
@@ -309,7 +431,7 @@
     var self = this;
     this.indicators.forEach(function (ins) {
       if (ins._v !== self.dataVersion) {
-        ins.result = TV.Indicators.compute(ins.key, self.candles, ins.params, { intervalMs: self.intervalMs });
+        ins.result = TV.Indicators.compute(ins.key, self.active, ins.params, { intervalMs: self.intervalMs });
         ins._v = self.dataVersion;
       }
     });
@@ -340,15 +462,11 @@
     return Math.max(50, (this.mount.clientWidth || 300) - this.scaleW);
   };
 
-  Chart.prototype.xAt = function (i) {
-    return this._plotW() - (this.rightIndex - i) * this.barW;
-  };
-  Chart.prototype.indexAt = function (x) {
-    return this.rightIndex - (this._plotW() - x) / this.barW;
-  };
+  Chart.prototype.xAt = function (i) { return this._plotW() - (this.rightIndex - i) * this.barW; };
+  Chart.prototype.indexAt = function (x) { return this.rightIndex - (this._plotW() - x) / this.barW; };
 
   Chart.prototype.timeForIndex = function (fi) {
-    var c = this.candles, n = c.length;
+    var c = this.active, n = c.length;
     if (!n) return 0;
     var i = Math.floor(fi), fr = fi - i;
     if (i < 0) return c[0].time + fi * this.intervalMs;
@@ -357,7 +475,7 @@
   };
 
   Chart.prototype.indexForTime = function (t) {
-    var c = this.candles, n = c.length;
+    var c = this.active, n = c.length;
     if (!n) return 0;
     if (t <= c[0].time) return (t - c[0].time) / this.intervalMs;
     if (t >= c[n - 1].time) return n - 1 + (t - c[n - 1].time) / this.intervalMs;
@@ -390,26 +508,37 @@
   Chart.prototype._computeLayout = function () {
     var availH = this.mount.clientHeight || 400;
     var oscs = this.indicators.filter(function (i) { return i.def.cat === 'oscillator' && i.visible; });
-    var nOsc = oscs.length;
-    var oscH = clamp(Math.round(availH * 0.16), 90, 150);
-    // El panel de precios nunca baja de este alto: si los osciladores no caben,
-    // el lienzo crece y el contenedor pasa a hacer scroll (paneles ilimitados).
-    var minMainH = Math.min(300, Math.max(160, availH - this.axisH - oscH));
-    var mainH = Math.max(minMainH, availH - this.axisH - nOsc * oscH);
-    this._canvasH = mainH + nOsc * oscH + this.axisH;
-    var rects = [{ kind: 'main', top: 0, h: mainH }];
+    var defOsc = clamp(Math.round(availH * 0.16), 90, 150);
+
+    var self = this;
+    var oscHeights = oscs.map(function (ins) { return self.paneSizes[ins.id] || defOsc; });
+    var totalOsc = oscHeights.reduce(function (a, b) { return a + b; }, 0);
+
+    var minMainH = Math.min(300, Math.max(160, availH - this.axisH - defOsc));
+    var mainH = this.paneSizes.main || Math.max(minMainH, availH - this.axisH - totalOsc);
+
+    this._canvasH = mainH + totalOsc + this.axisH;
+    var rects = [{ kind: 'main', id: 'main', top: 0, h: mainH }];
     var y = mainH;
-    oscs.forEach(function (ins) {
-      rects.push({ kind: 'ind', ins: ins, top: y, h: oscH });
-      y += oscH;
+    oscs.forEach(function (ins, i) {
+      rects.push({ kind: 'ind', id: ins.id, ins: ins, top: y, h: oscHeights[i] });
+      y += oscHeights[i];
     });
     this._paneRects = rects;
 
-    var sig = rects.map(function (r) { return (r.ins ? r.ins.id : 'main') + ':' + r.top + ':' + r.h; }).join('|');
+    var sig = rects.map(function (r) { return r.id + ':' + r.top + ':' + r.h; }).join('|');
     if (sig !== this._layoutSig) {
       this._layoutSig = sig;
       if (this.opts.onLayout) this.opts.onLayout(rects);
     }
+  };
+
+  // Índice del panel cuyo borde superior está a menos de 4 px de y.
+  Chart.prototype._separatorAt = function (y) {
+    for (var i = 1; i < this._paneRects.length; i++) {
+      if (Math.abs(y - this._paneRects[i].top) <= 4) return i;
+    }
+    return -1;
   };
 
   // ---------- render principal ----------
@@ -423,7 +552,7 @@
     ctx.fillStyle = th.bg;
     ctx.fillRect(0, 0, W, H);
 
-    var n = this.candles.length;
+    var n = this.active.length;
     if (!n) { this._renderCrosshair(); return; }
 
     this._ensureComputed();
@@ -435,7 +564,7 @@
     var i0 = Math.floor(this.rightIndex - plotW / this.barW) - 1;
     var v0 = Math.max(0, i0), v1 = Math.min(n - 1, i1);
 
-    if (v0 < 60 && this._hasMoreHistory && !this._loadingHistory && this.opts.onNeedHistory) {
+    if (v0 < 60 && this._hasMoreHistory && !this._loadingHistory && this.opts.onNeedHistory && this.replayAt == null) {
       this._loadingHistory = true;
       this.opts.onNeedHistory();
     }
@@ -458,7 +587,6 @@
 
     this._renderTimeAxis(timeTicks, plotW, W, H);
 
-    // borde del eje de precios
     ctx.strokeStyle = th.border;
     ctx.beginPath();
     ctx.moveTo(plotW + 0.5, 0);
@@ -469,10 +597,9 @@
     if (this.opts.onRendered) this.opts.onRendered();
   };
 
-  // marcas temporales "bonitas"
   Chart.prototype._timeTicks = function (i0, i1, plotW) {
     var out = [];
-    var n = this.candles.length;
+    var n = this.active.length;
     if (!n) return out;
     var ms = this.intervalMs;
     var units = [60e3, 120e3, 300e3, 600e3, 900e3, 1800e3, 3600e3, 7200e3, 14400e3, 21600e3, 43200e3,
@@ -487,28 +614,33 @@
 
     var from = Math.max(0, i0), to = Math.min(n - 1, i1);
     for (var i = from; i <= to; i++) {
-      var t = this.candles[i].time;
-      var d = new Date(t);
+      var t = this.active[i].time;
+      var d = this._d(t);
+      var prevD = i > 0 ? this._d(this.active[i - 1].time) : null;
       var hit = false, strong = false, label = '';
+
       if (unit === 'M1' || unit === 'M3' || unit === 'Y1') {
-        var isFirstOfMonth = d.getUTCDate() === 1 && (i === 0 || new Date(this.candles[i - 1].time).getUTCMonth() !== d.getUTCMonth());
-        var newMonth = i === 0 || new Date(this.candles[i - 1].time).getUTCMonth() !== d.getUTCMonth();
+        var newMonth = !prevD || prevD.getUTCMonth() !== d.getUTCMonth();
         if (unit === 'Y1') { hit = newMonth && d.getUTCMonth() === 0; strong = true; label = '' + d.getUTCFullYear(); }
         else if (unit === 'M3') { hit = newMonth && d.getUTCMonth() % 3 === 0; label = d.getUTCMonth() === 0 ? '' + d.getUTCFullYear() : MESES[d.getUTCMonth()]; strong = d.getUTCMonth() === 0; }
-        else { hit = newMonth || isFirstOfMonth; label = d.getUTCMonth() === 0 ? '' + d.getUTCFullYear() : MESES[d.getUTCMonth()]; strong = d.getUTCMonth() === 0; }
+        else { hit = newMonth; label = d.getUTCMonth() === 0 ? '' + d.getUTCFullYear() : MESES[d.getUTCMonth()]; strong = d.getUTCMonth() === 0; }
       } else if (unit >= 86400e3) {
+        var newDay = !prevD || prevD.getUTCDate() !== d.getUTCDate();
         var days = Math.round(unit / 86400e3);
-        var dayN = Math.floor(t / 86400e3);
-        hit = t % 86400e3 === 0 ? dayN % days === 0 : (i === 0 || Math.floor(this.candles[i - 1].time / 86400e3) !== dayN) && dayN % days === 0;
+        hit = newDay && (days === 1 || Math.floor(t / 86400e3) % days === 0);
         if (hit) {
           if (d.getUTCDate() === 1) { label = d.getUTCMonth() === 0 ? '' + d.getUTCFullYear() : MESES[d.getUTCMonth()]; strong = true; }
           else label = '' + d.getUTCDate();
         }
       } else {
-        hit = t % unit === 0;
+        // El corte se evalúa en hora local para que caiga en horas redondas.
+        var localMs = d.getTime();
+        hit = localMs % unit === 0;
         if (hit) {
-          if (t % 86400e3 === 0) { label = d.getUTCDate() + ' ' + MESES[d.getUTCMonth()]; strong = true; }
-          else {
+          if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+            label = d.getUTCDate() + ' ' + MESES[d.getUTCMonth()];
+            strong = true;
+          } else {
             label = ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2);
           }
         }
@@ -524,27 +656,33 @@
   Chart.prototype._priceGrid = function (ctx, scale, plotW, dec, fmt) {
     var th = this.theme;
     var inner = scale.h - scale.pt - scale.pb;
-    if (inner <= 0 || scale.max <= scale.min) return;
-    var step = niceStep((scale.max - scale.min) / Math.max(2, inner / 55));
-    var start = Math.ceil(scale.min / step) * step;
+    if (inner <= 0) return;
+    var ticks = scale.ticks(Math.max(2, inner / 55));
     ctx.font = '10px -apple-system, sans-serif';
-    for (var v = start; v <= scale.max + step * 0.001; v += step) {
+    var self = this;
+    ticks.forEach(function (v) {
       var y = Math.round(scale.y(v)) + 0.5;
-      if (y < scale.top + 2 || y > scale.top + scale.h - 2) continue;
-      ctx.strokeStyle = th.grid;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(plotW, y);
-      ctx.stroke();
+      if (y < scale.top + 2 || y > scale.top + scale.h - 2) return;
+      if (self.showGrid) {
+        ctx.strokeStyle = th.grid;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(plotW, y);
+        ctx.stroke();
+      }
       ctx.fillStyle = th.text;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(fmt ? fmt(v) : fmtN(v, dec), plotW + 6, y);
-    }
+      var label = fmt ? fmt(v) : (scale.mode === 'percent'
+        ? fmtN((v / scale.base - 1) * 100, 2) + '%'
+        : fmtN(v, dec));
+      ctx.fillText(label, plotW + 6, y);
+    });
   };
 
   Chart.prototype._vGrid = function (ctx, ticks, top, h) {
+    if (!this.showGrid) return;
     var th = this.theme;
     ticks.forEach(function (t) {
       ctx.strokeStyle = t.strong ? th.gridStrong : th.grid;
@@ -558,10 +696,9 @@
 
   Chart.prototype._renderMain = function (pane, i0, i1, v0, v1, plotW, timeTicks) {
     var ctx = this.ctx, th = this.theme;
-    var d = this.display, n = d.length;
+    var d = this.display;
     var self = this;
 
-    // rango de precios visible
     var min = Infinity, max = -Infinity, i, v;
     if (this.type === 'line' || this.type === 'area') {
       for (i = v0; i <= v1; i++) { v = d[i].close; if (v < min) min = v; if (v > max) max = v; }
@@ -587,7 +724,10 @@
     if (!isFinite(min) || !isFinite(max)) { min = 0; max = 1; }
     if (max === min) { max += Math.abs(max) * 0.01 + 1e-9; min -= Math.abs(min) * 0.01 + 1e-9; }
 
-    var scale = new Scale(min, max, pane.top, pane.h, 14, 14);
+    var baseK = d[Math.max(0, v0)];
+    var scale = new Scale(min, max, pane.top, pane.h, 14, 14, {
+      mode: this.scaleMode, base: baseK ? baseK.close : null, flip: this.flipScale
+    });
     this._mainScale = scale;
 
     ctx.save();
@@ -595,35 +735,33 @@
     ctx.rect(0, pane.top, plotW + this.scaleW, pane.h);
     ctx.clip();
 
-    // marca de agua
-    ctx.font = '700 ' + Math.min(60, pane.h / 5) + 'px -apple-system, sans-serif';
-    ctx.fillStyle = th.watermark;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(this.symbol + ' · ' + this.interval.toUpperCase(), plotW / 2, pane.top + pane.h / 2);
+    if (this.showWatermark) {
+      ctx.font = '700 ' + Math.min(60, pane.h / 5) + 'px -apple-system, sans-serif';
+      ctx.fillStyle = th.watermark;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.symbol + ' · ' + this.interval.toUpperCase(), plotW / 2, pane.top + pane.h / 2);
+    }
 
     this._vGrid(ctx, timeTicks, pane.top, pane.h);
     this._priceGrid(ctx, scale, plotW, this.decimals);
 
-    // recorta el dibujo de series al área del plot
     ctx.beginPath();
     ctx.rect(0, pane.top, plotW, pane.h);
     ctx.clip();
 
-    // rellenos de indicadores por debajo de las velas
     this.indicators.forEach(function (ins) {
       if (ins.def.cat !== 'overlay' || !ins.visible || !ins.result) return;
       self._renderFills(ctx, ins, scale, i0, i1);
     });
 
-    // precio
+    var upC = this.upColor(), dnC = this.downColor();
     var bodyW = Math.max(1, this.barW * 0.72);
     if (this.type === 'candles' || this.type === 'heikin') {
       for (i = v0; i <= v1; i++) {
         var k = d[i];
         var x = this.xAt(i) + this.barW / 2;
-        var up = k.close >= k.open;
-        var col = up ? th.up : th.down;
+        var col = k.close >= k.open ? upC : dnC;
         ctx.strokeStyle = col;
         ctx.fillStyle = col;
         ctx.lineWidth = Math.max(1, this.barW * 0.1);
@@ -632,16 +770,14 @@
         ctx.lineTo(x, scale.y(k.low));
         ctx.stroke();
         var yO = scale.y(k.open), yC = scale.y(k.close);
-        var top = Math.min(yO, yC), hh = Math.max(1, Math.abs(yC - yO));
-        ctx.fillRect(x - bodyW / 2, top, bodyW, hh);
+        ctx.fillRect(x - bodyW / 2, Math.min(yO, yC), bodyW, Math.max(1, Math.abs(yC - yO)));
       }
     } else if (this.type === 'bars') {
       ctx.lineWidth = Math.max(1, Math.min(2, this.barW * 0.15));
       for (i = v0; i <= v1; i++) {
         var kb = d[i];
         var xb = this.xAt(i) + this.barW / 2;
-        var colB = kb.close >= kb.open ? th.up : th.down;
-        ctx.strokeStyle = colB;
+        ctx.strokeStyle = kb.close >= kb.open ? upC : dnC;
         ctx.beginPath();
         ctx.moveTo(xb, scale.y(kb.high));
         ctx.lineTo(xb, scale.y(kb.low));
@@ -652,14 +788,12 @@
         ctx.stroke();
       }
     } else {
-      // línea / área
       ctx.beginPath();
       var started = false;
       for (i = v0; i <= v1; i++) {
         var xl = this.xAt(i) + this.barW / 2;
         var yl = scale.y(d[i].close);
-        if (!started) { ctx.moveTo(xl, yl); started = true; }
-        else ctx.lineTo(xl, yl);
+        if (!started) { ctx.moveTo(xl, yl); started = true; } else ctx.lineTo(xl, yl);
       }
       if (this.type === 'area' && started) {
         var grad = ctx.createLinearGradient(0, pane.top, 0, pane.top + pane.h);
@@ -677,8 +811,7 @@
         for (i = v0; i <= v1; i++) {
           var xa = this.xAt(i) + this.barW / 2;
           var ya = scale.y(d[i].close);
-          if (!started) { ctx.moveTo(xa, ya); started = true; }
-          else ctx.lineTo(xa, ya);
+          if (!started) { ctx.moveTo(xa, ya); started = true; } else ctx.lineTo(xa, ya);
         }
       }
       ctx.strokeStyle = th.areaLine;
@@ -687,25 +820,21 @@
       ctx.stroke();
     }
 
-    // líneas de indicadores superpuestos
     this.indicators.forEach(function (ins) {
       if (ins.def.cat !== 'overlay' || !ins.visible || !ins.result) return;
       self._renderOutputs(ctx, ins, scale, i0, i1, null);
     });
 
-    // dibujos del usuario
-    this._renderDrawings(ctx, scale, plotW, pane);
+    if (!this.drawingsHidden) this._renderDrawings(ctx, scale, plotW, pane);
 
     ctx.restore();
 
-    // línea del último precio + etiqueta
-    var lastRaw = this.candles[this.candles.length - 1];
-    var lastD = d[n - 1];
-    if (lastD) {
+    var lastD = d[d.length - 1];
+    var lastRaw = this.active[this.active.length - 1];
+    if (lastD && this.showLastLine) {
       var yLast = scale.y(lastD.close);
       if (yLast > pane.top && yLast < pane.top + pane.h) {
-        var upLast = lastRaw.close >= lastRaw.open;
-        var colLast = upLast ? th.up : th.down;
+        var colLast = lastRaw.close >= lastRaw.open ? upC : dnC;
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, pane.top, plotW, pane.h);
@@ -718,9 +847,29 @@
         ctx.lineTo(plotW, Math.round(yLast) + 0.5);
         ctx.stroke();
         ctx.restore();
-        this._axisLabel(ctx, plotW, yLast, fmtN(lastD.close, this.decimals), colLast, '#fff');
+
+        var txt = this.scaleMode === 'percent' && scale.base
+          ? fmtN((lastD.close / scale.base - 1) * 100, 2) + '%'
+          : fmtN(lastD.close, this.decimals);
+        this._axisLabel(ctx, plotW, yLast, txt, colLast, '#fff');
+
+        if (this.showCountdown && this.replayAt == null) {
+          var rest = this._barCountdown();
+          if (rest) this._axisLabel(ctx, plotW, yLast + 19, rest, th.crossLabelBg, th.crossLabelFg);
+        }
       }
     }
+  };
+
+  // Tiempo que falta para que cierre la vela en curso.
+  Chart.prototype._barCountdown = function () {
+    var last = this.active[this.active.length - 1];
+    if (!last || this.intervalMs >= 86400e3) return null;
+    var left = last.time + this.intervalMs - Date.now();
+    if (left < 0 || left > this.intervalMs) return null;
+    var s = Math.floor(left / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    return (h ? h + ':' + ('0' + m).slice(-2) : m) + ':' + ('0' + ss).slice(-2);
   };
 
   Chart.prototype._renderFills = function (ctx, ins, scale, i0, i1) {
@@ -783,8 +932,7 @@
           var v = o.values[i];
           if (v == null || !isFinite(v)) { pen = false; continue; }
           var x = self.xAt(i) + self.barW / 2, y = scale.y(v);
-          if (!pen) { ctx.moveTo(x, y); pen = true; }
-          else ctx.lineTo(x, y);
+          if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.setLineDash([]);
@@ -816,9 +964,9 @@
         for (var q = Math.max(0, i0); q <= limV; q++) {
           var vv = o.values[q];
           if (vv == null || !isFinite(vv)) continue;
-          var ck = self.candles[q];
-          var upC = ck && ck.close >= ck.open;
-          ctx.fillStyle = hexA(upC ? ins.colors[o.upKey] : ins.colors[o.dnKey], 0.55);
+          var ck = self.active[q];
+          var up = ck && ck.close >= ck.open;
+          ctx.fillStyle = hexA(up ? ins.colors[o.upKey] : ins.colors[o.dnKey], 0.55);
           var xv = self.xAt(q) + self.barW / 2;
           var yvv = scale.y(vv);
           ctx.fillRect(xv - bodyW / 2, yvv, bodyW, Math.max(1, bot - yvv));
@@ -867,8 +1015,6 @@
       return fmtN(v, span > 500 ? 0 : span > 20 ? 1 : span > 1 ? 2 : 4);
     });
 
-    // niveles de referencia (30/70, etc.)
-    var self = this;
     (res.levels || []).forEach(function (lv) {
       var y = Math.round(scale.y(lv.v)) + 0.5;
       if (y < pane.top || y > pane.top + pane.h) return;
@@ -914,13 +1060,13 @@
     var yy = Math.round(y);
     ctx.fillStyle = bg;
     ctx.beginPath();
-    var r = 3, x0 = plotW + 2, y0 = yy - 9, hh = 18;
-    ctx.roundRect ? ctx.roundRect(x0, y0, w, hh, r) : ctx.rect(x0, y0, w, hh);
+    if (ctx.roundRect) ctx.roundRect(plotW + 2, yy - 9, w, 18, 3);
+    else ctx.rect(plotW + 2, yy - 9, w, 18);
     ctx.fill();
     ctx.fillStyle = fg;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, x0 + 4, yy);
+    ctx.fillText(text, plotW + 6, yy);
   };
 
   // ---------- crosshair ----------
@@ -930,8 +1076,21 @@
     var H = this._canvasH;
     octx.clearRect(0, 0, W, H);
 
+    // realce del separador arrastrable
+    if (this._mouse && !this._pan && !this._drawState) {
+      var sepIdx = this._resizePane ? this._resizePane.idx : this._separatorAt(this._mouse.y);
+      if (sepIdx > 0 && this._paneRects[sepIdx]) {
+        octx.strokeStyle = th.resizeHot;
+        octx.lineWidth = 3;
+        octx.beginPath();
+        octx.moveTo(0, this._paneRects[sepIdx].top);
+        octx.lineTo(W, this._paneRects[sepIdx].top);
+        octx.stroke();
+      }
+    }
+
     var m = this._mouse;
-    var n = this.candles.length;
+    var n = this.active.length;
     if (!m || !n || m.x > this._plotW() || m.y > H - this.axisH) {
       if (this.opts.onCrosshair) this.opts.onCrosshair(null);
       this._renderDrawPreview(octx);
@@ -940,20 +1099,17 @@
 
     var plotW = this._plotW();
     var fi = this.indexAt(m.x - this.barW / 2);
-    var idx = clamp(Math.round(fi + 0), 0, n - 1);
+    var idx = clamp(Math.round(fi), 0, n - 1);
     var snapX = this.xAt(idx) + this.barW / 2;
 
     octx.strokeStyle = th.crossLine;
     octx.lineWidth = 1;
     octx.setLineDash([4, 4]);
-
-    // línea vertical en todos los paneles
     octx.beginPath();
     octx.moveTo(Math.round(snapX) + 0.5, 0);
     octx.lineTo(Math.round(snapX) + 0.5, H - this.axisH);
     octx.stroke();
 
-    // línea horizontal en el panel activo
     var pane = this._paneAt(m.y);
     if (pane) {
       octx.beginPath();
@@ -965,24 +1121,27 @@
       if (scale) {
         var price = scale.invert(m.y);
         var isVol = pane.kind === 'ind' && pane.ins.result && pane.ins.result.isVolume;
-        var txt = isVol ? fmtVol(price) : fmtN(price, pane.kind === 'main' ? this.decimals : 2);
+        var txt = isVol ? fmtVol(price)
+          : (pane.kind === 'main' && this.scaleMode === 'percent' && scale.base
+            ? fmtN((price / scale.base - 1) * 100, 2) + '%'
+            : fmtN(price, pane.kind === 'main' ? this.decimals : 2));
         this._axisLabelOverlay(octx, plotW, m.y, txt);
       }
     }
     octx.setLineDash([]);
 
-    // etiqueta de tiempo
-    var t = this.candles[idx] ? this.candles[idx].time : null;
+    var t = this.active[idx] ? this.active[idx].time : null;
     if (t != null) {
-      var d = new Date(t);
-      var txt2 = d.getUTCDate() + ' ' + MESES[d.getUTCMonth()] + ' \'' + ('' + d.getUTCFullYear()).slice(2);
+      var d = this._d(t);
+      var txt2 = d.getUTCDate() + ' ' + MESES[d.getUTCMonth()] + " '" + ('' + d.getUTCFullYear()).slice(2);
       if (this.intervalMs < 86400e3) txt2 += '  ' + ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2);
       octx.font = '10px -apple-system, sans-serif';
       var tw = octx.measureText(txt2).width + 14;
       var tx = clamp(snapX - tw / 2, 0, W - tw);
       octx.fillStyle = th.crossLabelBg;
       octx.beginPath();
-      octx.roundRect ? octx.roundRect(tx, H - this.axisH + 3, tw, 18, 3) : octx.rect(tx, H - this.axisH + 3, tw, 18);
+      if (octx.roundRect) octx.roundRect(tx, H - this.axisH + 3, tw, 18, 3);
+      else octx.rect(tx, H - this.axisH + 3, tw, 18);
       octx.fill();
       octx.fillStyle = th.crossLabelFg;
       octx.textAlign = 'center';
@@ -1000,7 +1159,8 @@
     octx.fillStyle = th.crossLabelBg;
     var yy = Math.round(y);
     octx.beginPath();
-    octx.roundRect ? octx.roundRect(plotW + 2, yy - 9, this.scaleW - 4, 18, 3) : octx.rect(plotW + 2, yy - 9, this.scaleW - 4, 18);
+    if (octx.roundRect) octx.roundRect(plotW + 2, yy - 9, this.scaleW - 4, 18, 3);
+    else octx.rect(plotW + 2, yy - 9, this.scaleW - 4, 18);
     octx.fill();
     octx.fillStyle = th.crossLabelFg;
     octx.textAlign = 'left';
@@ -1021,20 +1181,27 @@
     this.tool = t;
     this._drawState = null;
     if (t !== 'cursor') this.selection = null;
-    this.overlay.style.cursor = t === 'cursor' ? 'crosshair' : 'crosshair';
     this.requestRender();
   };
 
   Chart.prototype.getDrawings = function () {
     return this.drawings.map(function (d) {
-      return { type: d.type, p1: d.p1, p2: d.p2, color: d.color };
+      return {
+        type: d.type, p1: d.p1, p2: d.p2, p3: d.p3,
+        color: d.color, width: d.width, dash: d.dash, text: d.text, locked: d.locked
+      };
     });
   };
   Chart.prototype.setDrawings = function (list) {
     this.drawings = (list || []).map(function (d, i) {
-      return { id: 'd' + i, type: d.type, p1: d.p1, p2: d.p2, color: d.color || '#2962ff' };
+      return {
+        id: 'd' + i, type: d.type, p1: d.p1, p2: d.p2 || null, p3: d.p3 || null,
+        color: d.color || '#2962ff', width: d.width || 2, dash: d.dash || null,
+        text: d.text || '', locked: !!d.locked
+      };
     });
     Chart._dseq = this.drawings.length + 1;
+    this.selection = null;
     this.requestRender();
   };
   Chart._dseq = 1;
@@ -1049,49 +1216,50 @@
 
   Chart.prototype.deleteSelected = function () {
     if (!this.selection) return;
+    this.removeDrawing(this.selection.id);
+  };
+
+  Chart.prototype.removeDrawing = function (id) {
     this._pushUndo();
-    var id = this.selection.id;
     this.drawings = this.drawings.filter(function (d) { return d.id !== id; });
-    this.selection = null;
+    if (this.selection && this.selection.id === id) this.selection = null;
     this.requestRender();
     if (this.opts.onDrawingsChange) this.opts.onDrawingsChange();
   };
 
-  Chart.prototype._drawToScreen = function (pt, scale) {
-    return {
-      x: this.xAt(this.indexForTime(pt.t)) + this.barW / 2,
-      y: scale.y(pt.price)
-    };
+  Chart.prototype.cloneDrawing = function (id) {
+    var src = this.drawings.find(function (d) { return d.id === id; });
+    if (!src) return;
+    this._pushUndo();
+    var off = this.intervalMs * 6;
+    var copy = JSON.parse(JSON.stringify(src));
+    copy.id = 'd' + (Chart._dseq++);
+    ['p1', 'p2', 'p3'].forEach(function (k) { if (copy[k]) copy[k].t += off; });
+    this.drawings.push(copy);
+    this.selection = copy;
+    this.requestRender();
+    if (this.opts.onDrawingsChange) this.opts.onDrawingsChange();
   };
 
-  Chart.prototype._screenToData = function (x, y, scale) {
-    var fi = this.indexAt(x - this.barW / 2);
-    var price = scale.invert(y);
-    if (this.magnet) {
-      // Con el imán activo el punto salta al O/H/L/C más cercano de la vela,
-      // que es como se marcan los niveles en las plataformas de bolsa.
-      var i = clamp(Math.round(fi), 0, this.candles.length - 1);
-      var k = this.display[i] || this.candles[i];
-      if (k) {
-        var best = null, bestD = Infinity;
-        [k.open, k.high, k.low, k.close].forEach(function (v) {
-          var d = Math.abs(scale.y(v) - y);
-          if (d < bestD) { bestD = d; best = v; }
-        });
-        if (best != null && bestD < 22) {
-          return { t: this.timeForIndex(i), price: best };
-        }
-      }
-    }
-    return { t: this.timeForIndex(fi), price: price };
+  Chart.prototype.updateDrawing = function (id, props) {
+    var dr = this.drawings.find(function (d) { return d.id === id; });
+    if (!dr) return;
+    this._pushUndo();
+    Object.keys(props).forEach(function (k) { dr[k] = props[k]; });
+    this.requestRender();
+    if (this.opts.onDrawingsChange) this.opts.onDrawingsChange();
   };
 
-  // ---------- deshacer / rehacer de dibujos ----------
-  Chart.prototype._snapshot = function () {
-    return JSON.stringify(this.drawings.map(function (d) {
-      return { id: d.id, type: d.type, p1: d.p1, p2: d.p2, color: d.color };
-    }));
+  var DRAW_NAMES = {
+    trend: 'Línea de tendencia', ray: 'Rayo', extline: 'Línea extendida',
+    hline: 'Línea horizontal', hray: 'Rayo horizontal', vline: 'Línea vertical',
+    rect: 'Rectángulo', ellipse: 'Elipse', arrow: 'Flecha', text: 'Texto',
+    fib: 'Fibonacci', ruler: 'Regla', position: 'Posición', channel: 'Canal paralelo'
   };
+  Chart.prototype.drawingLabel = function (dr) { return DRAW_NAMES[dr.type] || dr.type; };
+
+  // ---------- deshacer / rehacer ----------
+  Chart.prototype._snapshot = function () { return JSON.stringify(this.getDrawings()); };
 
   Chart.prototype._pushUndo = function () {
     this._undo.push(this._snapshot());
@@ -1100,43 +1268,75 @@
   };
 
   Chart.prototype._restore = function (json) {
-    this.drawings = JSON.parse(json);
-    this.selection = null;
+    var sel = this.selection && this.selection.id;
+    this.setDrawings(JSON.parse(json));
+    this.selection = this.drawings.find(function (d) { return d.id === sel; }) || null;
     this.requestRender();
     if (this.opts.onDrawingsChange) this.opts.onDrawingsChange();
   };
 
   Chart.prototype.undo = function () {
     if (!this._undo.length) return false;
-    this._redo.push(this._snapshot());
+    var cur = this._snapshot();
     this._restore(this._undo.pop());
+    this._redo.push(cur);
     return true;
   };
 
   Chart.prototype.redo = function () {
     if (!this._redo.length) return false;
-    this._undo.push(this._snapshot());
+    var cur = this._snapshot();
     this._restore(this._redo.pop());
+    this._undo.push(cur);
     return true;
   };
 
-  // Encuadra el gráfico en una ventana de tiempo (barra inferior de rangos).
   Chart.prototype.zoomToRange = function (ms) {
-    var n = this.candles.length;
+    var n = this.active.length;
     if (!n) return;
     var plotW = this._plotW();
     if (ms == null) {
-      this.barW = clamp(plotW / n, 0.5, 60);
-      this.rightIndex = n - 1 + Math.max(2, Math.round(plotW / this.barW * 0.03));
-      this.requestRender();
-      return;
+      this.barW = clamp(plotW / n, 0.4, 60);
+    } else {
+      var fromIdx = this.indexForTime(this.active[n - 1].time - ms);
+      var bars = Math.max(5, (n - 1) - fromIdx);
+      this.barW = clamp(plotW / (bars * 1.06), 0.4, 60);
     }
-    var lastT = this.candles[n - 1].time;
-    var fromIdx = this.indexForTime(lastT - ms);
-    var bars = Math.max(5, (n - 1) - fromIdx);
-    this.barW = clamp(plotW / (bars * 1.06), 0.4, 60);
     this.rightIndex = n - 1 + Math.max(2, Math.round(plotW / this.barW * 0.04));
     this.requestRender();
+  };
+
+  Chart.prototype.resetView = function () {
+    var n = this.active.length;
+    if (!n) return;
+    var plotW = this._plotW();
+    this.barW = clamp(plotW / Math.max(60, Math.min(180, n)), 2, 20);
+    this.rightIndex = n - 1 + Math.max(4, Math.round(plotW / this.barW * 0.06));
+    this.requestRender();
+  };
+
+  Chart.prototype._drawToScreen = function (pt, scale) {
+    return { x: this.xAt(this.indexForTime(pt.t)) + this.barW / 2, y: scale.y(pt.price) };
+  };
+
+  Chart.prototype._screenToData = function (x, y, scale) {
+    var fi = this.indexAt(x - this.barW / 2);
+    var price = scale.invert(y);
+    if (this.magnet && this.magnet !== 'off') {
+      var i = clamp(Math.round(fi), 0, this.display.length - 1);
+      var k = this.display[i];
+      if (k) {
+        var best = null, bestD = Infinity;
+        [k.open, k.high, k.low, k.close].forEach(function (v) {
+          var dd = Math.abs(scale.y(v) - y);
+          if (dd < bestD) { bestD = dd; best = v; }
+        });
+        // Imán débil: sólo cuando el puntero está cerca. Fuerte: siempre.
+        var limit = this.magnet === 'strong' ? Infinity : 22;
+        if (best != null && bestD < limit) return { t: this.timeForIndex(i), price: best };
+      }
+    }
+    return { t: this.timeForIndex(fi), price: price };
   };
 
   Chart.prototype._renderDrawings = function (ctx, scale, plotW, pane) {
@@ -1148,80 +1348,189 @@
   };
 
   Chart.prototype._renderDrawing = function (ctx, dr, scale, plotW, pane, sel) {
-    var th = this.theme;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = dr.width || 2;
     ctx.strokeStyle = dr.color;
+    ctx.setLineDash(dr.dash || []);
     var a = dr.p1 ? this._drawToScreen(dr.p1, scale) : null;
     var b = dr.p2 ? this._drawToScreen(dr.p2, scale) : null;
+    var c = dr.p3 ? this._drawToScreen(dr.p3, scale) : null;
+    var dec = this.decimals;
+    if (!a) { ctx.setLineDash([]); return; }
 
-    if (dr.type === 'hline') {
-      var y = Math.round(scale.y(dr.p1.price)) + 0.5;
+    function line(x1, y1, x2, y2) {
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(plotW, y);
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
       ctx.stroke();
-      ctx.font = '10px -apple-system, sans-serif';
-      ctx.fillStyle = dr.color;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(fmtN(dr.p1.price, this.decimals), 6, y - 3);
-    } else if (dr.type === 'vline') {
-      var x = Math.round(a.x) + 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x, pane.top);
-      ctx.lineTo(x, pane.top + pane.h);
-      ctx.stroke();
-    } else if (dr.type === 'trend' || dr.type === 'ray') {
-      if (!b) return;
-      var bx = b.x, by = b.y;
-      if (dr.type === 'ray') {
-        var dx = b.x - a.x, dy = b.y - a.y;
-        if (Math.abs(dx) > 0.01) {
-          var ext = dx > 0 ? (plotW + 50 - a.x) / dx : (-50 - a.x) / dx;
-          bx = a.x + dx * ext;
-          by = a.y + dy * ext;
-        }
-      }
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(bx, by);
-      ctx.stroke();
-    } else if (dr.type === 'rect') {
-      if (!b) return;
-      var x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
-      var w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
-      ctx.fillStyle = hexA(dr.color, 0.12);
-      ctx.fillRect(x0, y0, w, h);
-      ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
-    } else if (dr.type === 'fib') {
-      if (!b) return;
-      var xL = Math.min(a.x, b.x), xR = Math.max(a.x, b.x);
-      var p1 = dr.p1.price, p2 = dr.p2.price;
-      ctx.font = '10px -apple-system, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      for (var i = 0; i < FIB_LEVELS.length; i++) {
-        var lv = FIB_LEVELS[i];
-        var pr = p2 + (p1 - p2) * lv;
-        var yF = Math.round(scale.y(pr)) + 0.5;
-        ctx.strokeStyle = FIB_COLORS[i];
-        ctx.beginPath();
-        ctx.moveTo(xL, yF);
-        ctx.lineTo(xR, yF);
-        ctx.stroke();
-        ctx.fillStyle = FIB_COLORS[i];
-        ctx.fillText(lv.toFixed(3) + '  (' + fmtN(pr, this.decimals) + ')', xL + 4, yF - 2);
-        if (i > 0) {
-          var prPrev = p2 + (p1 - p2) * FIB_LEVELS[i - 1];
-          ctx.fillStyle = hexA(FIB_COLORS[i], 0.07);
-          ctx.fillRect(xL, Math.min(yF, scale.y(prPrev)), xR - xL, Math.abs(yF - scale.y(prPrev)));
-        }
-      }
     }
+    function extend(from, to, both) {
+      var dx = to.x - from.x, dy = to.y - from.y;
+      if (Math.abs(dx) < 0.01) return { a: { x: from.x, y: pane.top }, b: { x: from.x, y: pane.top + pane.h } };
+      var kR = (plotW + 60 - from.x) / dx, kL = (-60 - from.x) / dx;
+      var pR = { x: from.x + dx * kR, y: from.y + dy * kR };
+      var pL = both ? { x: from.x + dx * kL, y: from.y + dy * kL } : from;
+      return { a: pL, b: pR };
+    }
+
+    switch (dr.type) {
+      case 'hline':
+      case 'hray': {
+        var y = Math.round(scale.y(dr.p1.price)) + 0.5;
+        var x0 = dr.type === 'hray' ? a.x : 0;
+        line(x0, y, plotW, y);
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.fillStyle = dr.color;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(fmtN(dr.p1.price, dec), x0 + 5, y - 3);
+        break;
+      }
+      case 'vline':
+        line(Math.round(a.x) + 0.5, pane.top, Math.round(a.x) + 0.5, pane.top + pane.h);
+        break;
+      case 'trend':
+        if (b) line(a.x, a.y, b.x, b.y);
+        break;
+      case 'ray':
+        if (b) { var r = extend(a, b, false); line(a.x, a.y, r.b.x, r.b.y); }
+        break;
+      case 'extline':
+        if (b) { var e = extend(a, b, true); line(e.a.x, e.a.y, e.b.x, e.b.y); }
+        break;
+      case 'arrow':
+        if (b) {
+          line(a.x, a.y, b.x, b.y);
+          var ang = Math.atan2(b.y - a.y, b.x - a.x);
+          var hl = 11 + (dr.width || 2) * 2;
+          ctx.beginPath();
+          ctx.moveTo(b.x, b.y);
+          ctx.lineTo(b.x - hl * Math.cos(ang - 0.4), b.y - hl * Math.sin(ang - 0.4));
+          ctx.lineTo(b.x - hl * Math.cos(ang + 0.4), b.y - hl * Math.sin(ang + 0.4));
+          ctx.closePath();
+          ctx.fillStyle = dr.color;
+          ctx.fill();
+        }
+        break;
+      case 'rect':
+        if (b) {
+          var rx = Math.min(a.x, b.x), ry = Math.min(a.y, b.y);
+          var rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
+          ctx.fillStyle = hexA(dr.color, 0.12);
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.strokeRect(rx + 0.5, ry + 0.5, rw, rh);
+        }
+        break;
+      case 'ellipse':
+        if (b) {
+          ctx.beginPath();
+          ctx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2,
+            Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2, 0, 0, Math.PI * 2);
+          ctx.fillStyle = hexA(dr.color, 0.12);
+          ctx.fill();
+          ctx.stroke();
+        }
+        break;
+      case 'text':
+        ctx.font = '600 ' + (11 + (dr.width || 2) * 2) + 'px -apple-system, sans-serif';
+        ctx.fillStyle = dr.color;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(dr.text || 'Texto', a.x + 4, a.y);
+        break;
+      case 'channel':
+        if (b) {
+          line(a.x, a.y, b.x, b.y);
+          if (c) {
+            var off = c.y - (a.y + (b.y - a.y) * ((c.x - a.x) / ((b.x - a.x) || 1)));
+            line(a.x, a.y + off, b.x, b.y + off);
+            ctx.fillStyle = hexA(dr.color, 0.1);
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.lineTo(b.x, b.y + off);
+            ctx.lineTo(a.x, a.y + off);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+        break;
+      case 'fib':
+        if (b) {
+          var xL = Math.min(a.x, b.x), xR = Math.max(a.x, b.x);
+          var p1v = dr.p1.price, p2v = dr.p2.price;
+          ctx.font = '10px -apple-system, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'bottom';
+          for (var f = 0; f < FIB_LEVELS.length; f++) {
+            var lv = FIB_LEVELS[f];
+            var pr = p2v + (p1v - p2v) * lv;
+            var yF = Math.round(scale.y(pr)) + 0.5;
+            ctx.strokeStyle = FIB_COLORS[f];
+            line(xL, yF, xR, yF);
+            ctx.fillStyle = FIB_COLORS[f];
+            ctx.fillText(lv.toFixed(3) + '  (' + fmtN(pr, dec) + ')', xL + 4, yF - 2);
+            if (f > 0) {
+              var prPrev = p2v + (p1v - p2v) * FIB_LEVELS[f - 1];
+              ctx.fillStyle = hexA(FIB_COLORS[f], 0.07);
+              ctx.fillRect(xL, Math.min(yF, scale.y(prPrev)), xR - xL, Math.abs(yF - scale.y(prPrev)));
+            }
+          }
+          ctx.strokeStyle = dr.color;
+        }
+        break;
+      case 'ruler':
+        if (b) {
+          var upR = dr.p2.price >= dr.p1.price;
+          var col = upR ? this.upColor() : this.downColor();
+          ctx.strokeStyle = col;
+          ctx.fillStyle = hexA(col, 0.12);
+          ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+          line(a.x, a.y, b.x, b.y);
+          var dPrice = dr.p2.price - dr.p1.price;
+          var dPct = dr.p1.price ? dPrice / dr.p1.price * 100 : 0;
+          var bars = Math.round((dr.p2.t - dr.p1.t) / this.intervalMs);
+          var txt = (dPrice >= 0 ? '+' : '') + fmtN(dPrice, dec) +
+            '  (' + (dPct >= 0 ? '+' : '') + fmtN(dPct, 2) + '%)  ' + Math.abs(bars) + ' velas';
+          ctx.font = '11px -apple-system, sans-serif';
+          var tw = ctx.measureText(txt).width + 12;
+          var bx = (a.x + b.x) / 2 - tw / 2, by = Math.min(a.y, b.y) - 24;
+          ctx.fillStyle = col;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(bx, by, tw, 20, 4); else ctx.rect(bx, by, tw, 20);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(txt, bx + tw / 2, by + 10);
+        }
+        break;
+      case 'position':
+        if (b) {
+          // Entrada en p1, objetivo en p2; el riesgo se dibuja a la mitad.
+          var entry = dr.p1.price, target = dr.p2.price;
+          var risk = entry - (target - entry) / 2;
+          var xa = Math.min(a.x, b.x), xb = Math.max(a.x, b.x) + 40;
+          var yE = scale.y(entry), yT = scale.y(target), yR = scale.y(risk);
+          ctx.fillStyle = hexA(this.upColor(), 0.16);
+          ctx.fillRect(xa, Math.min(yE, yT), xb - xa, Math.abs(yT - yE));
+          ctx.fillStyle = hexA(this.downColor(), 0.16);
+          ctx.fillRect(xa, Math.min(yE, yR), xb - xa, Math.abs(yR - yE));
+          ctx.strokeStyle = dr.color;
+          line(xa, yE, xb, yE);
+          ctx.font = '10px -apple-system, sans-serif';
+          ctx.fillStyle = this.theme.textStrong;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText('Objetivo ' + fmtN(target, dec), xa + 4, Math.min(yE, yT) + 12);
+          ctx.fillText('Entrada ' + fmtN(entry, dec), xa + 4, yE - 3);
+        }
+        break;
+    }
+    ctx.setLineDash([]);
 
     if (sel) {
       var th2 = this.theme;
-      [a, b].forEach(function (pt) {
+      [a, b, c].forEach(function (pt) {
         if (!pt) return;
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
@@ -1239,11 +1548,12 @@
     if (!st || !st.p1 || !this._mouse || !this._mainScale) return;
     var pane = this._paneRects[0];
     var m = this._mouse;
+    var live = this._screenToData(m.x, clamp(m.y, pane.top, pane.top + pane.h), this._mainScale);
     var tmp = {
       id: '_tmp', type: st.tool,
-      p1: st.p1,
-      p2: this._screenToData(m.x, clamp(m.y, pane.top, pane.top + pane.h), this._mainScale),
-      color: '#2962ff'
+      p1: st.p1, p2: st.p2 || live, p3: st.p2 ? live : null,
+      color: this.drawStyle.color, width: this.drawStyle.width, dash: this.drawStyle.dash,
+      text: 'Texto'
     };
     octx.save();
     octx.beginPath();
@@ -1254,7 +1564,7 @@
   };
 
   Chart.prototype._hitTestDrawing = function (x, y) {
-    if (!this._mainScale) return null;
+    if (!this._mainScale || this.drawingsHidden) return null;
     var scale = this._mainScale;
     var pane = this._paneRects[0];
     if (y > pane.top + pane.h) return null;
@@ -1263,46 +1573,60 @@
       var dx = x2 - x1, dy = y2 - y1;
       var len2 = dx * dx + dy * dy;
       var t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
-      var cx = x1 + t * dx, cy = y1 + t * dy;
-      return Math.hypot(px - cx, py - cy);
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
     }
     for (var i = this.drawings.length - 1; i >= 0; i--) {
       var dr = this.drawings[i];
+      if (dr.locked) continue;
       var a = dr.p1 ? this._drawToScreen(dr.p1, scale) : null;
       var b = dr.p2 ? this._drawToScreen(dr.p2, scale) : null;
-      // asas primero
-      if (a && Math.hypot(x - a.x, y - a.y) < TOL) return { dr: dr, handle: 'p1' };
+      var c = dr.p3 ? this._drawToScreen(dr.p3, scale) : null;
+      if (!a) continue;
+      if (Math.hypot(x - a.x, y - a.y) < TOL) return { dr: dr, handle: 'p1' };
       if (b && Math.hypot(x - b.x, y - b.y) < TOL) return { dr: dr, handle: 'p2' };
+      if (c && Math.hypot(x - c.x, y - c.y) < TOL) return { dr: dr, handle: 'p3' };
+
       var hit = false;
-      if (dr.type === 'hline') hit = Math.abs(y - scale.y(dr.p1.price)) < TOL;
-      else if (dr.type === 'vline') hit = Math.abs(x - a.x) < TOL;
-      else if (dr.type === 'trend') hit = b && distSeg(x, y, a.x, a.y, b.x, b.y) < TOL;
-      else if (dr.type === 'ray') {
-        if (b) {
+      switch (dr.type) {
+        case 'hline': hit = Math.abs(y - scale.y(dr.p1.price)) < TOL; break;
+        case 'hray': hit = Math.abs(y - scale.y(dr.p1.price)) < TOL && x >= a.x - TOL; break;
+        case 'vline': hit = Math.abs(x - a.x) < TOL; break;
+        case 'text': hit = x >= a.x - TOL && x < a.x + 130 && Math.abs(y - a.y) < 12; break;
+        case 'trend': case 'arrow': case 'ruler':
+          hit = !!b && distSeg(x, y, a.x, a.y, b.x, b.y) < TOL; break;
+        case 'ray': case 'extline': {
+          if (!b) break;
           var dx = b.x - a.x, dy = b.y - a.y;
-          var bx = b.x, by = b.y;
-          if (Math.abs(dx) > 0.01) {
-            var ext = dx > 0 ? (this._plotW() + 50 - a.x) / dx : (-50 - a.x) / dx;
-            bx = a.x + dx * ext;
-            by = a.y + dy * ext;
+          if (Math.abs(dx) < 0.01) { hit = Math.abs(x - a.x) < TOL; break; }
+          var kk = (x - a.x) / dx;
+          if (dr.type === 'ray' && kk < 0) break;
+          hit = Math.abs(y - (a.y + dy * kk)) < TOL;
+          break;
+        }
+        case 'channel': {
+          if (!b) break;
+          hit = distSeg(x, y, a.x, a.y, b.x, b.y) < TOL;
+          if (!hit && c) {
+            var off = c.y - (a.y + (b.y - a.y) * ((c.x - a.x) / ((b.x - a.x) || 1)));
+            hit = distSeg(x, y, a.x, a.y + off, b.x, b.y + off) < TOL;
           }
-          hit = distSeg(x, y, a.x, a.y, bx, by) < TOL;
+          break;
         }
-      } else if (dr.type === 'rect') {
-        if (b) {
+        case 'rect': case 'ellipse': case 'position': {
+          if (!b) break;
           var x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
-          var x1r = Math.max(a.x, b.x), y1r = Math.max(a.y, b.y);
-          hit = (x >= x0 - TOL && x <= x1r + TOL && y >= y0 - TOL && y <= y1r + TOL) &&
-            !(x > x0 + TOL && x < x1r - TOL && y > y0 + TOL && y < y1r - TOL);
-          if (!hit && x >= x0 && x <= x1r && y >= y0 && y <= y1r) hit = true;
+          var x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+          hit = x >= x0 - TOL && x <= x1 + TOL && y >= y0 - TOL && y <= y1 + TOL;
+          break;
         }
-      } else if (dr.type === 'fib') {
-        if (b) {
+        case 'fib': {
+          if (!b) break;
           var xL = Math.min(a.x, b.x), xR = Math.max(a.x, b.x);
           for (var f = 0; f < FIB_LEVELS.length; f++) {
             var pr = dr.p2.price + (dr.p1.price - dr.p2.price) * FIB_LEVELS[f];
             if (x >= xL - TOL && x <= xR + TOL && Math.abs(y - scale.y(pr)) < TOL) { hit = true; break; }
           }
+          break;
         }
       }
       if (hit) return { dr: dr, handle: 'body' };
@@ -1321,40 +1645,76 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     }
 
+    function finishDrawing(p) {
+      var need = TOOL_POINTS[self.tool] || 2;
+      var st = self._drawState;
+      var dr = {
+        id: 'd' + (Chart._dseq++), type: self.tool,
+        p1: st.p1, p2: need === 1 ? null : (st.p2 || p), p3: need === 3 ? p : null,
+        color: self.drawStyle.color, width: self.drawStyle.width, dash: self.drawStyle.dash,
+        text: self.tool === 'text' ? 'Texto' : '', locked: false
+      };
+      self._pushUndo();
+      self.drawings.push(dr);
+      self._drawState = null;
+      if (!self.keepDrawing) {
+        self.setTool('cursor');
+        if (self.opts.onToolDone) self.opts.onToolDone();
+      }
+      if (self.opts.onDrawingsChange) self.opts.onDrawingsChange();
+      if (self.opts.onDrawingCreated) self.opts.onDrawingCreated(dr);
+      self.requestRender();
+    }
+
+    el.addEventListener('contextmenu', function (ev) {
+      ev.preventDefault();
+      var p = pos(ev);
+      var hit = self._hitTestDrawing(p.x, p.y);
+      if (self.opts.onContextMenu) {
+        self.opts.onContextMenu({
+          x: ev.clientX, y: ev.clientY,
+          drawing: hit ? hit.dr : null,
+          price: self._mainScale && p.y <= self._paneRects[0].h ? self._mainScale.invert(p.y) : null,
+          pane: self._paneAt(p.y)
+        });
+      }
+    });
+
     el.addEventListener('mousedown', function (ev) {
       if (ev.button !== 0) return;
       var p = pos(ev);
-      var m = self._mainScale;
 
+      var sep = self._separatorAt(p.y);
+      if (sep > 0 && self.tool === 'cursor') {
+        self._resizePane = {
+          idx: sep, startY: p.y,
+          prevH: self._paneRects[sep - 1].h,
+          curH: self._paneRects[sep].h,
+          prevId: self._paneRects[sep - 1].id,
+          curId: self._paneRects[sep].id
+        };
+        return;
+      }
+
+      var m = self._mainScale;
       if (self.tool !== 'cursor' && m) {
         var pane0 = self._paneRects[0];
         if (p.y <= pane0.top + pane0.h && p.x <= self._plotW()) {
           var dp = self._screenToData(p.x, p.y, m);
-          if (self.tool === 'hline' || self.tool === 'vline') {
-            self._pushUndo();
-            self.drawings.push({ id: 'd' + (Chart._dseq++), type: self.tool, p1: dp, p2: null, color: '#2962ff' });
-            self.setTool('cursor');
-            if (self.opts.onToolDone) self.opts.onToolDone();
-            if (self.opts.onDrawingsChange) self.opts.onDrawingsChange();
-            self.requestRender();
-          } else if (!self._drawState) {
+          var need = TOOL_POINTS[self.tool] || 2;
+          if (!self._drawState) {
             self._drawState = { tool: self.tool, p1: dp };
+            if (need === 1) finishDrawing(dp);
+          } else if (need === 3 && !self._drawState.p2) {
+            self._drawState.p2 = dp;
           } else {
-            var d2 = self._screenToData(p.x, p.y, m);
-            self._pushUndo();
-            self.drawings.push({ id: 'd' + (Chart._dseq++), type: self._drawState.tool, p1: self._drawState.p1, p2: d2, color: '#2962ff' });
-            self._drawState = null;
-            self.setTool('cursor');
-            if (self.opts.onToolDone) self.opts.onToolDone();
-            if (self.opts.onDrawingsChange) self.opts.onDrawingsChange();
-            self.requestRender();
+            finishDrawing(dp);
           }
           return;
         }
       }
 
-      // selección / arrastre de dibujos
-      var hitD = self._hitTestDrawing(p.x, p.y);
+      var hitD = self.drawingsLocked ? null : self._hitTestDrawing(p.x, p.y);
       if (hitD) {
         self.selection = hitD.dr;
         self._pan = null;
@@ -1362,13 +1722,19 @@
         self._dragDraw = {
           dr: hitD.dr, handle: hitD.handle,
           startX: p.x, startY: p.y,
-          o1: hitD.dr.p1 ? { t: hitD.dr.p1.t, price: hitD.dr.p1.price } : null,
-          o2: hitD.dr.p2 ? { t: hitD.dr.p2.t, price: hitD.dr.p2.price } : null
+          p1: hitD.dr.p1 ? { t: hitD.dr.p1.t, price: hitD.dr.p1.price } : null,
+          p2: hitD.dr.p2 ? { t: hitD.dr.p2.t, price: hitD.dr.p2.price } : null,
+          p3: hitD.dr.p3 ? { t: hitD.dr.p3.t, price: hitD.dr.p3.price } : null
         };
+        if (self.opts.onSelection) self.opts.onSelection(hitD.dr);
         self.requestRender();
         return;
       }
-      if (self.selection) { self.selection = null; self.requestRender(); }
+      if (self.selection) {
+        self.selection = null;
+        if (self.opts.onSelection) self.opts.onSelection(null);
+        self.requestRender();
+      }
 
       self._pan = { startX: p.x, startRI: self.rightIndex };
       el.style.cursor = 'grabbing';
@@ -1378,31 +1744,43 @@
       var p = pos(ev);
       self._mouse = p;
 
+      if (self._resizePane) {
+        var r = self._resizePane;
+        var dy = p.y - r.startY;
+        self.paneSizes[r.prevId] = clamp(r.prevH + dy, 60, 2400);
+        self.paneSizes[r.curId] = clamp(r.curH - dy, 60, 2400);
+        self.resize();
+        return;
+      }
+
       if (self._dragDraw && self._mainScale) {
         var dd = self._dragDraw;
         var dT = self.timeForIndex(self.indexAt(p.x)) - self.timeForIndex(self.indexAt(dd.startX));
         var dP = self._mainScale.invert(p.y) - self._mainScale.invert(dd.startY);
-        if (dd.handle === 'p1' && dd.o1) { dd.dr.p1 = { t: dd.o1.t + dT, price: dd.o1.price + dP }; }
-        else if (dd.handle === 'p2' && dd.o2) { dd.dr.p2 = { t: dd.o2.t + dT, price: dd.o2.price + dP }; }
-        else {
-          if (dd.o1) dd.dr.p1 = { t: dd.o1.t + dT, price: dd.o1.price + dP };
-          if (dd.o2) dd.dr.p2 = { t: dd.o2.t + dT, price: dd.o2.price + dP };
-        }
+        var keys = dd.handle === 'body' ? ['p1', 'p2', 'p3'] : [dd.handle];
+        keys.forEach(function (k) {
+          if (!dd[k]) return;
+          dd.dr[k] = { t: dd[k].t + dT, price: dd[k].price + dP };
+        });
         self.requestRender();
         return;
       }
 
       if (self._pan) {
-        var dx = p.x - self._pan.startX;
-        self.rightIndex = self._pan.startRI - dx / self.barW;
+        self.rightIndex = self._pan.startRI - (p.x - self._pan.startX) / self.barW;
         self.requestRender();
         return;
       }
 
-      self._dirty = true; // refresco del crosshair
+      el.style.cursor = (self.tool === 'cursor' && self._separatorAt(p.y) > 0) ? 'row-resize' : 'crosshair';
+      self._dirty = true;
     });
 
     window.addEventListener('mouseup', function () {
+      if (self._resizePane) {
+        self._resizePane = null;
+        if (self.opts.onPanesResized) self.opts.onPanesResized(self.paneSizes);
+      }
       if (self._dragDraw) {
         self._dragDraw = null;
         if (self.opts.onDrawingsChange) self.opts.onDrawingsChange();
@@ -1421,28 +1799,24 @@
       var p = pos(ev);
       var factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
       var fi = self.indexAt(p.x);
-      var newW = clamp(self.barW * factor, 0.5, 60);
+      var newW = clamp(self.barW * factor, 0.4, 60);
       self.rightIndex = fi + (self._plotW() - p.x) / newW;
       self.barW = newW;
       self.requestRender();
     }, { passive: false });
 
-    el.addEventListener('dblclick', function () {
-      if (!self.candles.length) return;
-      var plotW = self._plotW();
-      self.barW = clamp(plotW / Math.max(60, Math.min(180, self.candles.length)), 2, 20);
-      self.rightIndex = self.candles.length - 1 + Math.max(4, Math.round(plotW / self.barW * 0.06));
-      self.requestRender();
-    });
+    el.addEventListener('dblclick', function () { self.resetView(); });
 
-    // táctil
     el.addEventListener('touchstart', function (ev) {
       if (ev.touches.length === 1) {
         var r = el.getBoundingClientRect();
         self._pan = { startX: ev.touches[0].clientX - r.left, startRI: self.rightIndex };
       } else if (ev.touches.length === 2) {
         self._pan = null;
-        self._pinch = { d: Math.hypot(ev.touches[0].clientX - ev.touches[1].clientX, ev.touches[0].clientY - ev.touches[1].clientY), barW: self.barW };
+        self._pinch = {
+          d: Math.hypot(ev.touches[0].clientX - ev.touches[1].clientX, ev.touches[0].clientY - ev.touches[1].clientY),
+          barW: self.barW
+        };
       }
     }, { passive: true });
     el.addEventListener('touchmove', function (ev) {
@@ -1453,7 +1827,7 @@
         self.requestRender();
       } else if (ev.touches.length === 2 && self._pinch) {
         var d = Math.hypot(ev.touches[0].clientX - ev.touches[1].clientX, ev.touches[0].clientY - ev.touches[1].clientY);
-        self.barW = clamp(self._pinch.barW * d / self._pinch.d, 0.5, 60);
+        self.barW = clamp(self._pinch.barW * d / self._pinch.d, 0.4, 60);
         self.requestRender();
       }
       ev.preventDefault();
@@ -1468,31 +1842,23 @@
         self._drawState = null;
         self.setTool('cursor');
         if (self.opts.onToolDone) self.opts.onToolDone();
-      } else if (ev.key === 'ArrowLeft') {
-        self.rightIndex -= 10; self.requestRender();
-      } else if (ev.key === 'ArrowRight') {
-        self.rightIndex += 10; self.requestRender();
-      } else if (ev.key === '+' || ev.key === '=') {
-        self.barW = clamp(self.barW * 1.15, 0.5, 60); self.requestRender();
-      } else if (ev.key === '-') {
-        self.barW = clamp(self.barW / 1.15, 0.5, 60); self.requestRender();
-      }
+      } else if (ev.key === 'ArrowLeft') { self.rightIndex -= 10; self.requestRender(); }
+      else if (ev.key === 'ArrowRight') { self.rightIndex += 10; self.requestRender(); }
+      else if (ev.key === '+' || ev.key === '=') { self.barW = clamp(self.barW * 1.15, 0.4, 60); self.requestRender(); }
+      else if (ev.key === '-') { self.barW = clamp(self.barW / 1.15, 0.4, 60); self.requestRender(); }
     });
   };
 
-  Chart.prototype.historyLoaded = function () {
-    this._loadingHistory = false;
-  };
+  Chart.prototype.historyLoaded = function () { this._loadingHistory = false; };
 
   Chart.prototype.snapshot = function (title) {
-    var W = this.canvas.width, H = this.canvas.height;
-    var tmp = document.createElement('canvas');
-    tmp.width = W; tmp.height = H + 40 * (window.devicePixelRatio || 1);
-    var t = tmp.getContext('2d');
     var dpr = window.devicePixelRatio || 1;
+    var tmp = document.createElement('canvas');
+    tmp.width = this.canvas.width;
+    tmp.height = this.canvas.height + 40 * dpr;
+    var t = tmp.getContext('2d');
     t.fillStyle = this.theme.bg;
     t.fillRect(0, 0, tmp.width, tmp.height);
-    t.font = 700 * 1 + ' ' + 16 * dpr + 'px -apple-system, sans-serif';
     t.font = '700 ' + 16 * dpr + 'px -apple-system, sans-serif';
     t.fillStyle = this.theme.textStrong;
     t.fillText(title || (this.symbol + ' · ' + this.interval), 12 * dpr, 26 * dpr);
@@ -1504,4 +1870,6 @@
   TV.fmtN = fmtN;
   TV.fmtVol = fmtVol;
   TV.decimalsFor = decimalsFor;
+  TV.TOOL_POINTS = TOOL_POINTS;
+  TV.DRAW_NAMES = DRAW_NAMES;
 })();

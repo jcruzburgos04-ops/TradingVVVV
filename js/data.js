@@ -61,7 +61,11 @@
   };
 
   // preferCrypto: 'bybit' (por omisión, es donde opera el usuario) o 'binance'.
-  var settings = { proxy: '', preferCrypto: 'bybit' };
+  // demo: NUNCA se activa solo. Sólo si el usuario lo enciende a mano para
+  // probar la interfaz sin conexión. Inventar precios confunde: si una fuente
+  // falla se informa el error, y si el mercado está cerrado el gráfico queda
+  // quieto en la última vela real.
+  var settings = { proxy: '', preferCrypto: 'bybit', demo: false };
 
   function applyProxy(url) {
     var p = settings.proxy;
@@ -406,8 +410,8 @@
     this.onStatus = null;
   }
 
-  Feed.prototype._status = function (s, label) {
-    if (this.onStatus) this.onStatus(s, label);
+  Feed.prototype._status = function (s, label, market) {
+    if (this.onStatus) this.onStatus(s, label, market);
   };
 
   // Serie derivada (MEP/CCL): cociente vela a vela de dos activos.
@@ -487,18 +491,44 @@
       }
     }
 
+    if (settings.demo) {
+      this.demoMode = true;
+      this.source = { id: 'demo', label: 'simulado' };
+      return Promise.resolve(generateDemo(desc, interval, limit));
+    }
+
     return chain.reduce(function (p, step) {
       return p.catch(function () { return step(); });
     }, Promise.reject(new Error('inicio'))).then(function (candles) {
-      if (!candles || candles.length < 2) throw new Error('serie vacía');
+      if (!candles || candles.length < 2) throw new Error('la fuente no devolvió velas');
+      self.demoMode = false;
       return candles;
     }).catch(function (e) {
-      console.warn('Sin datos en vivo para ' + desc.s + ' (' + e.message + '); usando modo demostración.');
-      self.demoMode = true;
-      self.source = { id: 'demo', label: 'demostración' };
-      return generateDemo(desc, interval, limit);
+      self.demoMode = false;
+      self.source = null;
+      self._status('err');
+      // El error sube a la interfaz para explicarlo y ofrecer reintentar.
+      throw new Error(motivo(desc, e));
     });
   };
+
+  // Traduce el fallo técnico a algo accionable.
+  function motivo(desc, e) {
+    var m = (e && e.message) || 'error desconocido';
+    if (/Failed to fetch|NetworkError|load failed/i.test(m)) {
+      return 'No se pudo contactar la fuente de datos de ' + desc.s +
+        '. Puede ser falta de conexión o que el navegador bloquee el pedido por CORS: ' +
+        'probá configurar un proxy en Fuentes de datos.';
+    }
+    if (/HTTP 4\d\d/.test(m)) {
+      return 'La fuente no reconoce el símbolo ' + desc.s + ' (' + m + '). ' +
+        'Revisá el ticker o probá otro mercado.';
+    }
+    if (/HTTP 5\d\d/.test(m)) {
+      return 'La fuente está caída en este momento (' + m + '). Probá de nuevo en un rato.';
+    }
+    return 'No se pudieron cargar los datos de ' + desc.s + ': ' + m;
+  }
 
   Feed.prototype.loadOlder = function (desc, interval, beforeTime, limit) {
     // Cripto pagina hacia atrás; en acciones y bonos la primera carga ya trae
@@ -530,6 +560,21 @@
   Feed.prototype.openLive = function (desc, interval, onCandle) {
     this.closeLive();
     if (this.demoMode) { this._openDemoLive(desc, interval, onCandle); return; }
+
+    // Mercado cerrado: no se sondea ni se simula nada. La última vela real se
+    // queda como está y el estado lo informa. Se reintenta cerca de la apertura.
+    var st = TV.Market ? TV.Market.status(desc) : { open: true };
+    if (!st.open) {
+      var self0 = this;
+      this._status('closed', null, st);
+      if (st.nextMs != null) {
+        this.reopenTimer = setTimeout(function () {
+          self0.openLive(desc, interval, onCandle);
+        }, Math.min(st.nextMs + 2000, 3600000));
+      }
+      return;
+    }
+
     if (desc.mkt === 'crypto') {
       if (this.source === Bybit) this._openBybitLive(desc, interval, onCandle);
       else this._openBinanceLive(desc, interval, onCandle);
@@ -700,6 +745,7 @@
   Feed.prototype.seedDemoLive = function (lastCandle) { this._demoSeed = lastCandle; };
 
   Feed.prototype.closeLive = function () {
+    if (this.reopenTimer) { clearTimeout(this.reopenTimer); this.reopenTimer = null; }
     if (this.ws) { var w = this.ws; this.ws = null; try { w.close(); } catch (e) { } }
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     if (this.wsTimer) { clearTimeout(this.wsTimer); this.wsTimer = null; }
@@ -725,9 +771,11 @@
     if (this.demo) { this._watchDemo(); return; }
 
     var self = this;
+    function abierto(d) { return !TV.Market || TV.Market.status(d).open; }
     var crypto = this._descs.filter(function (d) { return d.mkt === 'crypto'; });
-    var ar = this._descs.filter(function (d) { return d.mkt === 'ar' && !d.derived; });
-    var us = this._descs.filter(function (d) { return d.mkt === 'us'; });
+    // Sin cotizaciones nuevas fuera del horario: los últimos precios quedan fijos.
+    var ar = this._descs.filter(function (d) { return d.mkt === 'ar' && !d.derived && abierto(d); });
+    var us = this._descs.filter(function (d) { return d.mkt === 'us' && abierto(d); });
 
     if (crypto.length) this._watchCrypto(crypto);
 

@@ -83,6 +83,17 @@ Yahoo no publica velas de 2h, 4h, 6h, 8h o 12h: esas temporalidades se arman agr
 | **Interacción** | Zoom con la rueda, paneo arrastrando, pellizco táctil, crosshair con OHLCV |
 | **Historial infinito** | En cripto carga velas antiguas al desplazarte a la izquierda |
 | **Extras** | Captura PNG, pantalla completa, tema oscuro/claro, todo guardado en `localStorage` |
+| **Escalas** | Normal, logarítmica, porcentaje, invertida y ajuste automático |
+| **Zona horaria** | Buenos Aires por omisión; también Nueva York, Madrid, Londres, Tokio y UTC |
+| **Reproducción** | Recorré la serie vela a vela, con velocidad regulable |
+
+### 🚫 Nunca inventa precios
+
+Si una fuente no responde, el gráfico **no simula nada**: muestra qué pasó y ofrece reintentar o revisar las fuentes. Si el mercado está cerrado, la última vela real queda quieta y arriba dice **Mercado cerrado** con cuánto falta para la apertura; tampoco se consultan cotizaciones que no van a cambiar.
+
+Los horarios que usa son: cripto 24/7, BYMA de 11:00 a 17:00 y NYSE/Nasdaq de 9:30 a 16:00, sin fines de semana ni feriados (los feriados se calculan, incluida la Pascua, así que el calendario no se vence; aun así puede errarle a algún puente o cierre extraordinario).
+
+Existe un modo de **datos simulados** para probar la interfaz sin conexión, pero hay que encenderlo a mano en *Fuentes de datos* y, mientras está activo, un cartel amarillo permanente lo recuerda.
 
 ### 🎨 Interfaz
 
@@ -90,7 +101,9 @@ La disposición sigue de cerca a TradingView: barra superior con el activo y su 
 
 Cada activo tiene su **ícono circular** con la banderita del mercado. Se dibujan en SVG dentro de la propia página —las criptomonedas con su color de marca, el resto con un monograma de color estable— así que funcionan sin conexión y sin depender de ningún CDN. Si preferís logos reales, en *Fuentes de datos* podés indicar un proveedor de imágenes con `{s}`.
 
-Además: **imán** para pegar los dibujos a los precios O/H/L/C de la vela, **deshacer/rehacer**, **ventana de datos** con los valores de cada indicador bajo el cursor y **alertas de precio** con notificación del navegador.
+**Todo se puede redimensionar arrastrando**: el borde entre el gráfico y el panel lateral cambia el ancho (doble clic lo devuelve al valor original), y los separadores entre el gráfico y cada indicador cambian las alturas. Las medidas quedan guardadas.
+
+Además: **imán** con tres modos (desactivado, débil y fuerte, con su menú propio), **modo de dibujo continuo**, **bloquear** y **ocultar** dibujos, **árbol de objetos**, **menú del clic derecho**, **barra de estilo** para color, grosor y trazo de cada dibujo, **deshacer/rehacer**, **ventana de datos**, **alertas de precio** con notificación del navegador y **cuenta regresiva** al cierre de la vela.
 
 ### 📊 28 indicadores (todos configurables, todos ilimitados)
 
@@ -102,7 +115,9 @@ Cuando los paneles no entran en pantalla, el gráfico crece y aparece scroll ver
 
 ### ✏️ Herramientas de dibujo
 
-Línea de tendencia · Rayo · Línea horizontal · Línea vertical · Rectángulo · Retroceso de Fibonacci. Seleccioná con clic, mové los extremos arrastrando, borrá con `Supr`. Se guardan por activo.
+Línea de tendencia · Rayo · Línea extendida · Línea horizontal · Rayo horizontal · Línea vertical · Canal paralelo · Flecha · Rectángulo · Elipse · Texto · Retroceso de Fibonacci · Regla (mide precio, porcentaje y cantidad de velas) · Posición larga.
+
+Seleccioná con clic, mové los extremos arrastrando, borrá con `Supr`. Se guardan por activo.
 
 ## ⌨️ Atajos de teclado
 
@@ -115,6 +130,8 @@ Línea de tendencia · Rayo · Línea horizontal · Línea vertical · Rectángu
 | `Supr` | Borrar el dibujo seleccionado |
 | `A` | Panel de alertas |
 | `Ctrl+Z` / `Ctrl+Y` | Deshacer / rehacer dibujos |
+| `M` | Imán |
+| `L` / `P` | Escala logarítmica / porcentaje |
 | `Esc` | Cancelar herramienta / cerrar ventanas |
 | Doble clic | Reiniciar la vista |
 
@@ -128,6 +145,7 @@ js/catalog-us.js       S&P 500, NYSE/Nasdaq, ETF, índices, ADR argentinos
 js/catalog-ar.js       BYMA: acciones, CEDEARs, bonos, BOPREAL, CER, MEP/CCL
 js/catalog.js          Índice, búsqueda y resolución de símbolos
 js/logos.js            Íconos circulares dibujados en SVG, con banderita de mercado
+js/market.js           Horarios y feriados de cada mercado
 js/indicators.js       Cálculo de los 28 indicadores
 js/data.js             Fuentes de datos y enrutado por mercado
 js/engine.js           Render en canvas: velas, paneles, crosshair, dibujos
@@ -138,12 +156,16 @@ tools/build-single.mjs   Empaqueta todo en un único HTML autocontenido
 
 Todo es JavaScript puro (sin frameworks ni CDN): funciona en cualquier navegador moderno.
 
+Hay un inventario completo de funciones de TradingView y su estado en
+[`docs/comparacion-tradingview.md`](docs/comparacion-tradingview.md).
+
 ## 🧭 Hoja de ruta
 
-- Alertas de precio con notificaciones del navegador
-- Paridad y TIR de los bonos calculadas en el gráfico
+- Comparar varios símbolos en el mismo gráfico
+- Perfil de volumen
 - Diseños multi-gráfico (2×2, 1+3…)
-- Repetición de mercado (replay) para practicar
+- Paridad y TIR de los bonos calculadas en el gráfico
+- Más figuras: extensiones de Fibonacci, ondas de Elliott, patrones XABCD
 
 ## ⚠️ Aviso
 

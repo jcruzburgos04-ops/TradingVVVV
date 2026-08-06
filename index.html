@@ -96,6 +96,7 @@
   <div id="conn" class="conn" title="Estado de la conexión de datos">
     <span class="dot"></span><span id="conn-text">Conectando…</span>
   </div>
+  <div id="mkt-status" class="mkt-status" title="Horario del mercado"></div>
   <button id="btn-sources" class="tb-btn icon" title="Fuentes de datos">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
   </button>
@@ -112,31 +113,77 @@
 
 <main class="layout">
   <!-- ============ herramientas de dibujo ============ -->
-  <aside class="tools">
-    <button class="tool active" data-tool="cursor" title="Cursor / seleccionar">
+  <aside class="tools" id="tools">
+    <button class="tool active" data-tool="cursor" title="Cursor (Esc)">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button class="tool" data-tool="trend" title="Línea de tendencia">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/></svg>
+
+    <div class="tool-wrap">
+      <button class="tool" data-tool="trend" title="Líneas de tendencia">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/></svg>
+      </button>
+      <button class="tool-more" data-menu="menu-lines" title="Más líneas">▸</button>
+      <div class="tool-menu" id="menu-lines" hidden>
+        <button data-tool="trend">Línea de tendencia</button>
+        <button data-tool="ray">Rayo</button>
+        <button data-tool="extline">Línea extendida</button>
+        <button data-tool="hline">Línea horizontal</button>
+        <button data-tool="hray">Rayo horizontal</button>
+        <button data-tool="vline">Línea vertical</button>
+        <button data-tool="channel">Canal paralelo</button>
+        <button data-tool="arrow">Flecha</button>
+      </div>
+    </div>
+
+    <div class="tool-wrap">
+      <button class="tool" data-tool="rect" title="Figuras">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      </button>
+      <button class="tool-more" data-menu="menu-shapes" title="Más figuras">▸</button>
+      <div class="tool-menu" id="menu-shapes" hidden>
+        <button data-tool="rect">Rectángulo</button>
+        <button data-tool="ellipse">Elipse</button>
+        <button data-tool="text">Texto</button>
+      </div>
+    </div>
+
+    <div class="tool-wrap">
+      <button class="tool" data-tool="fib" title="Fibonacci y proyecciones">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg>
+      </button>
+      <button class="tool-more" data-menu="menu-fib" title="Más">▸</button>
+      <div class="tool-menu" id="menu-fib" hidden>
+        <button data-tool="fib">Retroceso de Fibonacci</button>
+        <button data-tool="position">Posición larga</button>
+      </div>
+    </div>
+
+    <button class="tool" data-tool="ruler" title="Regla: mide precio, porcentaje y velas">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 15l12-12 6 6-12 12z"/><path d="M7 11l2 2M10 8l2 2M13 5l2 2"/></svg>
     </button>
-    <button class="tool" data-tool="ray" title="Rayo (línea extendida)">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20L20 4m0 0h-6m6 0v6"/></svg>
-    </button>
-    <button class="tool" data-tool="hline" title="Línea horizontal">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12h18"/><circle cx="12" cy="12" r="2"/></svg>
-    </button>
-    <button class="tool" data-tool="vline" title="Línea vertical">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v18"/><circle cx="12" cy="12" r="2"/></svg>
-    </button>
-    <button class="tool" data-tool="rect" title="Rectángulo">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
-    </button>
-    <button class="tool" data-tool="fib" title="Retroceso de Fibonacci">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg>
-    </button>
+
     <div class="tool-sep"></div>
-    <button class="tool" id="btn-magnet" title="Imán: pegar los dibujos a los precios de la vela">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 8h4M14 8h4"/></svg>
+
+    <div class="tool-wrap">
+      <button class="tool" id="btn-magnet" title="Imán">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 8h4M14 8h4"/></svg>
+      </button>
+      <button class="tool-more" data-menu="menu-magnet" title="Modo del imán">▸</button>
+      <div class="tool-menu" id="menu-magnet" hidden>
+        <button data-magnet="off">Imán desactivado</button>
+        <button data-magnet="weak">Imán débil — se pega si está cerca</button>
+        <button data-magnet="strong">Imán fuerte — siempre a O/H/L/C</button>
+      </div>
+    </div>
+
+    <button class="tool" id="btn-keepdraw" title="Seguir dibujando: no vuelve al cursor">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/></svg>
+    </button>
+    <button class="tool" id="btn-lockdraw" title="Bloquear los dibujos">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </button>
+    <button class="tool" id="btn-hidedraw" title="Ocultar los dibujos">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
     </button>
     <button class="tool danger" id="btn-clear-draw" title="Borrar todos los dibujos">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
@@ -163,12 +210,30 @@
       <button class="range" data-range="1A">1A</button>
       <button class="range" data-range="5A">5A</button>
       <button class="range" data-range="ALL">Todos</button>
+      <span class="rb-sep"></span>
+      <button class="range" id="btn-replay" title="Reproducción de barras">▶ Reproducción</button>
       <span class="flex-fill"></span>
+      <button class="range scale-btn" data-scale="percent" title="Escala en porcentaje">%</button>
+      <button class="range scale-btn" data-scale="log" title="Escala logarítmica">log</button>
+      <button class="range" id="btn-autofit" title="Ajustar a los datos">auto</button>
+      <span class="rb-sep"></span>
+      <select id="tz-select" class="rb-select" title="Zona horaria">
+        <option value="America/Argentina/Buenos_Aires">Buenos Aires</option>
+        <option value="America/New_York">Nueva York</option>
+        <option value="Europe/Madrid">Madrid</option>
+        <option value="Europe/London">Londres</option>
+        <option value="Asia/Tokyo">Tokio</option>
+        <option value="UTC">UTC</option>
+      </select>
+      <span class="rb-sep"></span>
       <span class="rb-info">Fuente: <b id="sb-source">—</b></span>
       <span class="rb-sep"></span>
       <span id="sb-clock" class="rb-info"></span>
     </div>
   </section>
+
+  <!-- separador: arrastrar para achicar o agrandar el panel -->
+  <div class="vsplit" id="vsplit" title="Arrastrá para cambiar el ancho"></div>
 
   <!-- ============ panel derecho ============ -->
   <aside class="sidepanel" id="sidepanel">
@@ -194,6 +259,14 @@
       <div id="datawindow" class="dw-list"></div>
     </section>
 
+    <section class="panel" id="panel-objects" hidden>
+      <div class="panel-head">
+        <span class="panel-title">Árbol de objetos</span>
+        <span id="obj-count" class="muted-hint"></span>
+      </div>
+      <div id="objects-list" class="obj-list"></div>
+    </section>
+
     <section class="panel" id="panel-alerts" hidden>
       <div class="panel-head"><span class="panel-title">Alertas de precio</span></div>
       <div class="al-addrow">
@@ -215,6 +288,9 @@
     </button>
     <button class="rail-btn" data-panel="data" title="Ventana de datos">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>
+    </button>
+    <button class="rail-btn" data-panel="objects" title="Árbol de objetos (dibujos)">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h6M4 12h6M4 18h6"/><circle cx="16" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="16" cy="18" r="2"/></svg>
     </button>
     <button class="rail-btn" data-panel="alerts" title="Alertas de precio">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
@@ -309,6 +385,10 @@
       </div>
 
       <div class="set-row">
+        <label for="src-demo">Datos simulados (sólo para probar sin conexión)</label>
+        <input type="checkbox" id="src-demo">
+      </div>
+      <div class="set-row">
         <label>Activos en el catálogo</label>
         <span id="src-stats" class="mono"></span>
       </div>
@@ -324,8 +404,71 @@
   </div>
 </div>
 
+<div id="modal-chart" class="modal" hidden>
+  <div class="modal-card small">
+    <div class="modal-head">
+      <span class="modal-title">Ajustes del gráfico</span>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="set-form">
+      <div class="set-row"><label>Color alcista</label><input type="color" id="ch-up" value="#26a69a"></div>
+      <div class="set-row"><label>Color bajista</label><input type="color" id="ch-down" value="#ef5350"></div>
+      <div class="set-row"><label>Grilla</label><input type="checkbox" id="ch-grid" checked></div>
+      <div class="set-row"><label>Marca de agua</label><input type="checkbox" id="ch-watermark" checked></div>
+      <div class="set-row"><label>Línea del último precio</label><input type="checkbox" id="ch-lastline" checked></div>
+      <div class="set-row"><label>Cuenta regresiva de la vela</label><input type="checkbox" id="ch-countdown" checked></div>
+      <div class="set-row"><label>Invertir escala de precios</label><input type="checkbox" id="ch-flip"></div>
+      <div class="set-row">
+        <label for="ch-precision">Decimales</label>
+        <select id="ch-precision">
+          <option value="">Automáticos</option>
+          <option value="0">0</option><option value="1">1</option><option value="2">2</option>
+          <option value="3">3</option><option value="4">4</option><option value="6">6</option><option value="8">8</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot"><button id="ch-apply" class="mini-btn accent">Aplicar</button></div>
+  </div>
+</div>
+
+<!-- menú del clic derecho -->
+<div id="ctxmenu" class="ctxmenu" hidden></div>
+
+<!-- estilo del dibujo seleccionado -->
+<div id="drawbar" class="drawbar" hidden>
+  <input type="color" id="db-color" title="Color">
+  <select id="db-width" title="Grosor">
+    <option value="1">1 px</option><option value="2">2 px</option>
+    <option value="3">3 px</option><option value="4">4 px</option>
+  </select>
+  <select id="db-dash" title="Trazo">
+    <option value="">Continuo</option>
+    <option value="6,4">Guiones</option>
+    <option value="2,3">Puntos</option>
+  </select>
+  <input type="text" id="db-text" placeholder="Texto…" hidden>
+  <button id="db-clone" title="Clonar">⧉</button>
+  <button id="db-lock" title="Bloquear">🔒</button>
+  <button id="db-del" class="danger" title="Quitar">✕</button>
+</div>
+
+<!-- controles de reproducción -->
+<div id="replaybar" class="replaybar" hidden>
+  <button id="rp-play" title="Reproducir / pausar">▶</button>
+  <button id="rp-step" title="Vela siguiente">⏭</button>
+  <select id="rp-speed" title="Velocidad">
+    <option value="1000">1×</option>
+    <option value="500" selected>2×</option>
+    <option value="200">5×</option>
+    <option value="60">10×</option>
+  </select>
+  <span id="rp-info" class="rp-info"></span>
+  <button id="rp-exit" title="Salir de la reproducción">✕</button>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 
+<script src="js/market.js"></script>
 <script src="js/catalog-crypto.js"></script>
 <script src="js/catalog-us.js"></script>
 <script src="js/catalog-ar.js"></script>
