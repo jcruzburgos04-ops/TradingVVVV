@@ -267,9 +267,31 @@ body {
 }
 .wl-item:hover { background: var(--hover); }
 .wl-item.active { border-left-color: var(--accent); background: var(--hover); }
-.wl-item .wl-sym { font-weight: 700; font-size: 12px; flex: 1; }
-.wl-item .wl-px { font-size: 12px; text-align: right; }
-.wl-item .wl-chg { font-size: 11px; width: 58px; text-align: right; }
+.wl-item .wl-sym {
+  font-weight: 700;
+  font-size: 12px;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.wl-item .wl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-mkt {
+  font-size: 8px;
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 1px 3px;
+  background: var(--panel-2);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.wl-mkt.mkt-ar { background: rgba(41, 98, 255, 0.18); color: #5b8dff; }
+.wl-mkt.mkt-us { background: rgba(38, 166, 154, 0.18); color: #26a69a; }
+.wl-mkt.mkt-crypto { background: rgba(240, 185, 11, 0.18); color: #f0b90b; }
+.wl-item .wl-px { font-size: 12px; text-align: right; flex: 0 0 auto; padding-left: 6px; }
+.wl-item .wl-chg { font-size: 11px; width: 56px; text-align: right; flex: 0 0 auto; }
 .wl-item .wl-chg.up { color: var(--up); }
 .wl-item .wl-chg.down { color: var(--down); }
 .wl-item .wl-del {
@@ -355,7 +377,95 @@ body {
 .modal-close:hover { background: var(--hover); color: var(--text); }
 .modal-foot { padding: 10px 12px; border-top: 1px solid var(--border); text-align: right; }
 
-.sym-list { overflow-y: auto; }
+/* filtros por mercado y tipo */
+.chips {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.chips.sub { padding-top: 0; border-bottom: 1px solid var(--border); }
+.chips[hidden] { display: none; }
+.chip {
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  color: var(--text-muted);
+  border-radius: 14px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.chip:hover { color: var(--text); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.chip.sm { padding: 3px 10px; font-size: 11px; }
+
+/* etiquetas de mercado */
+.mkt-chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: var(--panel-2);
+  color: var(--text-muted);
+}
+.mkt-chip.mkt-ar { background: rgba(41, 98, 255, 0.18); color: #5b8dff; }
+.mkt-chip.mkt-us { background: rgba(38, 166, 154, 0.18); color: #26a69a; }
+.mkt-chip.mkt-crypto { background: rgba(240, 185, 11, 0.18); color: #f0b90b; }
+.s-tag.mkt-ar { color: #5b8dff; border-color: #5b8dff; }
+.s-tag.mkt-us { color: #26a69a; border-color: #26a69a; }
+.s-tag.mkt-crypto { color: #f0b90b; border-color: #f0b90b; }
+
+.sym-list { overflow-y: auto; flex: 1 1 auto; min-height: 120px; }
+.sym-item.custom .s-sym { color: var(--accent); }
+.sym-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.muted-hint { color: var(--text-muted); font-size: 11px; }
+
+/* panel de fuentes */
+.src-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.src-row b { color: var(--text); font-weight: 600; }
+.src-sep { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
+.src-msg {
+  font-size: 12px;
+  color: var(--up);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.4;
+}
+.src-msg.err { color: var(--down); }
+.src-msg[hidden] { display: none; }
+.set-row.col { flex-direction: column; align-items: stretch; gap: 5px; }
+.set-row input.wide {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.set-row input.wide:focus { border-color: var(--accent); }
+.mono { font-variant-numeric: tabular-nums; font-size: 12px; }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
 .sym-item {
   display: flex;
   align-items: center;

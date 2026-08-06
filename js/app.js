@@ -3,16 +3,17 @@
   'use strict';
   var TV = window.TV;
   var $ = function (s) { return document.querySelector(s); };
-  var LS_KEY = 'librecharts.v1';
+  var LS_KEY = 'librecharts.v2';
 
   // ---------- estado ----------
   var state = {
-    symbol: 'BTCUSDT',
-    interval: '1h',
+    symbol: 'ar:GGAL',
+    interval: '1d',
     type: 'candles',
     theme: 'dark',
+    proxy: '',
     indicators: [{ key: 'volume', params: null, colors: null }],
-    watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT'],
+    watchlist: ['ar:GGAL', 'ar:YPFD', 'ar:AL30', 'ar:GD30', 'ar:MEP', 'us:SPY', 'us:AAPL', 'crypto:BTCUSDT'],
     drawings: {}
   };
 
@@ -24,6 +25,8 @@
       });
     }
   } catch (e) { }
+
+  TV.Data.settings.proxy = state.proxy || '';
 
   var saveTimer = null;
   function persist() {
@@ -42,6 +45,7 @@
 
   var feed = new TV.Data.Feed();
   var tickers = new TV.Data.Tickers();
+  var current = null;   // activo mostrado (descriptor del catálogo)
 
   var chart = new TV.Chart($('#chart-mount'), {
     theme: state.theme,
@@ -53,41 +57,48 @@
     onToolDone: function () { setActiveToolBtn('cursor'); }
   });
 
-  // La leyenda vive dentro del lienzo desplazable: así cada rótulo de oscilador
-  // acompaña a su panel cuando hay más indicadores de los que caben en pantalla.
   chart.stack.appendChild($('#legend'));
 
   // ---------- conexión ----------
-  feed.onStatus = function (s) {
+  feed.onStatus = function (s, label) {
     var el = $('#conn'), txt = $('#conn-text');
     el.className = 'conn';
     if (s === 'live') { el.classList.add('live'); txt.textContent = 'EN VIVO'; }
     else if (s === 'demo') { el.classList.add('demo'); txt.textContent = 'MODO DEMO'; }
-    else if (s === 'err') { el.classList.add('err'); txt.textContent = 'ERROR'; }
+    else if (s === 'err') { el.classList.add('err'); txt.textContent = 'SIN DATOS'; }
     else txt.textContent = 'Conectando…';
+    if (label) $('#sb-source').textContent = label;
   };
 
   // ---------- carga de datos ----------
   var loadSeq = 0;
-  function loadSymbol(symbol, interval) {
+  function loadSymbol(desc, interval) {
+    if (!desc) return;
     var seq = ++loadSeq;
-    state.symbol = symbol;
+    current = desc;
+    state.symbol = TV.Catalog.key(desc);
     state.interval = interval;
-    $('#cur-symbol').textContent = symbol;
-    document.title = symbol + ' · ' + interval.toUpperCase() + ' — LibreCharts';
+
+    $('#cur-symbol').textContent = desc.s;
+    var chip = $('#cur-mkt');
+    chip.textContent = mktLabel(desc);
+    chip.className = 'mkt-chip mkt-' + desc.mkt;
+    document.title = desc.s + ' · ' + interval.toUpperCase() + ' — LibreCharts';
     $('#loading').hidden = false;
     feed.closeLive();
 
-    feed.load(symbol, interval, 1000).then(function (candles) {
+    feed.load(desc, interval, 1000).then(function (candles) {
       if (seq !== loadSeq) return;
       $('#loading').hidden = true;
-      chart.setData(candles, symbol, interval, TV.Data.INTERVAL_MS[interval]);
-      chart.setDrawings(state.drawings[symbol] || []);
+      chart.setData(candles, desc.s, interval, TV.Data.INTERVAL_MS[interval]);
+      chart.setDrawings(state.drawings[state.symbol] || []);
+      $('#sb-source').textContent = feed.source ? feed.source.label : '—';
+
       if (feed.demoMode) {
-        feed.onStatus && feed.onStatus('demo');
+        feed.onStatus('demo', 'demostración');
         feed.seedDemoLive(candles[candles.length - 1]);
       }
-      feed.openLive(symbol, interval, function (k) {
+      feed.openLive(desc, interval, function (k) {
         if (seq !== loadSeq) return;
         chart.mergeLive(k);
         updateLegend(null);
@@ -99,13 +110,28 @@
   }
 
   function loadOlder() {
-    if (!chart) return;
+    if (!chart || !current) return;
     var first = chart.candles[0];
     if (!first) { chart.historyLoaded(); return; }
-    feed.loadOlder(state.symbol, state.interval, first.time, 1000).then(function (older) {
+    feed.loadOlder(current, state.interval, first.time, 1000).then(function (older) {
       chart.prepend(older);
       chart.historyLoaded();
     });
+  }
+
+  function mktLabel(d) {
+    return d.mkt === 'ar' ? 'BYMA' : d.mkt === 'us' ? 'EE.UU.' : 'Cripto';
+  }
+
+  function mktShort(d) {
+    return d.mkt === 'ar' ? 'AR' : d.mkt === 'us' ? 'US' : 'CR';
+  }
+
+  function ccySymbol(d) {
+    if (!d) return '';
+    if (d.ccy === 'ARS') return '$';
+    if (d.ccy === 'USD') return 'US$';
+    return '';
   }
 
   // ---------- leyenda ----------
@@ -122,15 +148,20 @@
     var chg = prev.close ? (k.close - prev.close) / prev.close * 100 : 0;
     var cls = k.close >= k.open ? 'up' : 'down';
     var dec = chart.decimals;
+    var cur = ccySymbol(current);
+    var volRow = current && (current.type === 'fx' || current.type === 'index')
+      ? '' : '<span class="muted">Vol</span><span>' + TV.fmtVol(k.volume) + '</span>';
+
     $('#legend-main').innerHTML =
-      '<span class="sym">' + esc(state.symbol) + '</span>' +
+      '<span class="sym">' + esc(current ? current.s : '') + '</span>' +
+      '<span class="muted">' + esc(current ? mktLabel(current) : '') + '</span>' +
       '<span class="muted">' + esc(state.interval.toUpperCase()) + '</span>' +
-      '<span class="muted">O</span><span class="' + cls + '">' + TV.fmtN(k.open, dec) + '</span>' +
-      '<span class="muted">H</span><span class="' + cls + '">' + TV.fmtN(k.high, dec) + '</span>' +
-      '<span class="muted">L</span><span class="' + cls + '">' + TV.fmtN(k.low, dec) + '</span>' +
-      '<span class="muted">C</span><span class="' + cls + '">' + TV.fmtN(k.close, dec) + '</span>' +
+      '<span class="muted">O</span><span class="' + cls + '">' + cur + TV.fmtN(k.open, dec) + '</span>' +
+      '<span class="muted">H</span><span class="' + cls + '">' + cur + TV.fmtN(k.high, dec) + '</span>' +
+      '<span class="muted">L</span><span class="' + cls + '">' + cur + TV.fmtN(k.low, dec) + '</span>' +
+      '<span class="muted">C</span><span class="' + cls + '">' + cur + TV.fmtN(k.close, dec) + '</span>' +
       '<span class="' + (chg >= 0 ? 'up' : 'down') + '">' + fmtPct(chg) + '</span>' +
-      '<span class="muted">Vol</span><span>' + TV.fmtVol(k.volume) + '</span>';
+      volRow;
 
     chart.indicators.forEach(function (ins) {
       var row = document.getElementById('lg-' + ins.id);
@@ -171,7 +202,7 @@
         var btn = ev.target.closest('.lg-btn');
         if (!btn) return;
         var act = btn.dataset.act;
-        if (act === 'del') removeIndicator(ins.id);
+        if (act === 'del') chart.removeIndicator(ins.id);
         else if (act === 'cfg') openSettings(ins.id);
         else if (act === 'eye') chart.toggleIndicator(ins.id);
       });
@@ -185,8 +216,6 @@
     updateLegend(null);
   }
 
-  // sitúa la leyenda de cada oscilador sobre su panel
-  // (el motor puede llamarnos desde su constructor, antes de que `chart` exista)
   function positionIndLegends(rects) {
     if (!chart) return;
     rects = rects || chart._paneRects;
@@ -198,8 +227,6 @@
       row.classList.add('abs');
       row.style.top = (r.top + 4) + 'px';
     });
-    // superposiciones apiladas bajo la leyenda principal
-    var y = 0;
     chart.indicators.forEach(function (ins) {
       if (ins.def.cat !== 'overlay') return;
       var row = document.getElementById('lg-' + ins.id);
@@ -210,7 +237,6 @@
   }
 
   // ---------- indicadores ----------
-  // El motor llama aquí ante cualquier alta, baja o cambio de indicador.
   function syncIndicators() {
     rebuildIndLegend();
     renderIndModalCounts();
@@ -219,10 +245,6 @@
 
   function addIndicator(key, params, colors) {
     chart.addIndicator(key, params, colors);
-  }
-
-  function removeIndicator(id) {
-    chart.removeIndicator(id);
   }
 
   function renderIndModalCounts() {
@@ -254,7 +276,7 @@
         var el = document.createElement('div');
         el.className = 'ind-item';
         el.dataset.key = d.key;
-        el.innerHTML = '<span class="i-name">' + esc(d.name) + ' <span class="muted" style="color:var(--text-muted)">· ' + esc(d.short) + '</span></span>' +
+        el.innerHTML = '<span class="i-name">' + esc(d.name) + ' <span style="color:var(--text-muted)">· ' + esc(d.short) + '</span></span>' +
           '<span class="i-count"></span><button class="i-add">Añadir</button>';
         el.addEventListener('click', function () { addIndicator(d.key); });
         list.appendChild(el);
@@ -333,9 +355,10 @@
     closeModals();
     $(sel).hidden = false;
     var inp = $(sel).querySelector('input[type="text"]');
-    if (inp) { inp.value = ''; inp.focus(); }
+    if (inp && sel !== '#modal-sources') { inp.value = ''; inp.focus(); }
     if (sel === '#modal-ind') buildIndModal();
     if (sel === '#modal-symbol') buildSymList();
+    if (sel === '#modal-sources') openSources();
   }
   function closeModals() {
     document.querySelectorAll('.modal').forEach(function (m) { m.hidden = true; });
@@ -350,44 +373,136 @@
     if (ev.key === 'Escape') closeModals();
   });
 
-  // ---------- búsqueda de símbolos ----------
+  // ---------- búsqueda de activos ----------
+  var symFilter = { mkt: 'all', type: 'all' };
+
+  function buildFilterChips() {
+    var mBox = $('#sym-markets');
+    mBox.innerHTML = '';
+    TV.Catalog.MARKETS.forEach(function (m) {
+      var b = document.createElement('button');
+      b.className = 'chip' + (symFilter.mkt === m.id ? ' on' : '');
+      b.textContent = m.label;
+      b.addEventListener('click', function () {
+        symFilter.mkt = m.id;
+        symFilter.type = 'all';
+        buildSymList();
+      });
+      mBox.appendChild(b);
+    });
+
+    var tBox = $('#sym-types');
+    tBox.innerHTML = '';
+    var groups = symFilter.mkt === 'ar'
+      ? TV.Catalog.AR_GROUPS
+      : symFilter.mkt === 'us'
+        ? [{ id: 'stock', label: 'Acciones' }, { id: 'etf', label: 'ETF' }, { id: 'adr', label: 'ADR argentinos' }, { id: 'index', label: 'Índices' }]
+        : [];
+    if (!groups.length) { tBox.hidden = true; return; }
+    tBox.hidden = false;
+    [{ id: 'all', label: 'Todos' }].concat(groups).forEach(function (g) {
+      var b = document.createElement('button');
+      b.className = 'chip sm' + (symFilter.type === g.id ? ' on' : '');
+      b.textContent = g.label;
+      b.addEventListener('click', function () {
+        symFilter.type = g.id;
+        buildSymList();
+      });
+      tBox.appendChild(b);
+    });
+  }
+
   function buildSymList() {
-    var q = ($('#sym-q').value || '').toUpperCase().trim();
+    buildFilterChips();
+    var q = ($('#sym-q').value || '').trim();
     var list = $('#sym-list');
     list.innerHTML = '';
-    var matches = TV.Data.SYMBOLS.filter(function (s) {
-      return !q || s[0].indexOf(q) >= 0 || s[1].toUpperCase().indexOf(q) >= 0;
-    });
-    if (q && !matches.some(function (s) { return s[0] === q; }) && /^[A-Z0-9]{5,14}$/.test(q)) {
-      matches.unshift([q, 'Símbolo personalizado', true]);
-    }
-    matches.slice(0, 60).forEach(function (s) {
+
+    var results = TV.Catalog.search(q, symFilter.mkt, symFilter.type, 120);
+    results.forEach(function (d) {
       var el = document.createElement('div');
       el.className = 'sym-item';
-      el.innerHTML = '<span class="s-sym">' + esc(s[0]) + '</span><span class="s-name">' + esc(s[1]) + '</span>' +
-        (s[2] ? '<span class="s-tag">escrito</span>' : '<span class="s-tag">cripto</span>');
+      el.innerHTML =
+        '<span class="s-sym">' + esc(d.s) + '</span>' +
+        '<span class="s-name">' + esc(d.n) + '</span>' +
+        '<span class="s-tag mkt-' + d.mkt + '">' + esc(mktLabel(d)) + '</span>' +
+        '<span class="s-tag">' + esc(TV.Catalog.typeLabel(d)) + '</span>';
       el.addEventListener('click', function () {
         closeModals();
-        loadSymbol(s[0], state.interval);
+        loadSymbol(d, state.interval);
       });
       list.appendChild(el);
     });
-    if (!matches.length) {
-      list.innerHTML = '<div class="sym-item"><span class="s-name">Sin resultados. Escribe un par completo, p. ej. BTCUSDT.</span></div>';
+
+    // Un ticker que no está en el catálogo igual se puede abrir.
+    if (q && !results.some(function (d) { return d.s.toUpperCase() === q.toUpperCase(); })) {
+      var el2 = document.createElement('div');
+      el2.className = 'sym-item custom';
+      el2.innerHTML = '<span class="s-sym">' + esc(q.toUpperCase()) + '</span>' +
+        '<span class="s-name">Abrir como símbolo escrito a mano</span><span class="s-tag">nuevo</span>';
+      el2.addEventListener('click', function () {
+        var d = TV.Catalog.improvise(q, symFilter.mkt === 'all' ? null : symFilter.mkt);
+        if (d) { closeModals(); loadSymbol(d, state.interval); }
+      });
+      list.appendChild(el2);
+    }
+
+    var st = TV.Catalog.stats();
+    $('#sym-count').textContent = results.length + ' de ' + st.total + ' activos';
+    if (!results.length && !q) {
+      list.innerHTML = '<div class="sym-item"><span class="s-name">Sin resultados para este filtro.</span></div>';
     }
   }
+
   $('#sym-q').addEventListener('input', buildSymList);
   $('#sym-q').addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter') {
-      var first = $('#sym-list .sym-item .s-sym');
-      if (first) { closeModals(); loadSymbol(first.textContent, state.interval); }
-    }
+    if (ev.key !== 'Enter') return;
+    var first = $('#sym-list .sym-item');
+    if (first) first.click();
   });
   $('#ind-q').addEventListener('input', buildIndModal);
+
+  // ---------- fuentes de datos ----------
+  function openSources() {
+    $('#src-proxy').value = state.proxy || '';
+    var st = TV.Catalog.stats();
+    $('#src-stats').textContent =
+      st.total + ' (Argentina ' + (st.ar || 0) + ' · EE.UU. ' + (st.us || 0) + ' · cripto ' + (st.crypto || 0) + ')';
+    $('#src-msg').hidden = true;
+  }
+
+  $('#src-discover').addEventListener('click', function () {
+    var msg = $('#src-msg');
+    msg.hidden = false;
+    msg.className = 'src-msg';
+    msg.textContent = 'Consultando data912…';
+    TV.Data.discoverArgentina().then(function (added) {
+      msg.textContent = added
+        ? 'Listo: se sumaron ' + added + ' activos que cotizan hoy en BYMA (letras, ONs y nuevas emisiones).'
+        : 'El catálogo ya estaba al día.';
+      openSources();
+      msg.hidden = false;
+      renderWatchlist();
+    }).catch(function (e) {
+      msg.className = 'src-msg err';
+      msg.textContent = 'No se pudo consultar data912 (' + e.message + '). Suele ser CORS o falta de red: probá con un proxy.';
+    });
+  });
+
+  $('#src-apply').addEventListener('click', function () {
+    state.proxy = ($('#src-proxy').value || '').trim();
+    TV.Data.settings.proxy = state.proxy;
+    persist();
+    closeModals();
+    toast('Fuentes actualizadas, recargando datos…');
+    if (current) loadSymbol(current, state.interval);
+    startTickers();
+  });
 
   // ---------- barra superior ----------
   $('#btn-symbol').addEventListener('click', function () { openModal('#modal-symbol'); });
   $('#btn-indicators').addEventListener('click', function () { openModal('#modal-ind'); });
+  $('#btn-sources').addEventListener('click', function () { openModal('#modal-sources'); });
   $('#ind-clear').addEventListener('click', function () {
     if (!chart.indicators.length) { toast('No hay indicadores que quitar'); return; }
     chart.clearIndicators();
@@ -402,13 +517,13 @@
   document.querySelectorAll('.tb-btn.tf').forEach(function (b) {
     b.addEventListener('click', function () {
       setActiveTf(b.dataset.tf);
-      loadSymbol(state.symbol, b.dataset.tf);
+      loadSymbol(current, b.dataset.tf);
     });
   });
   $('#tf-extra').addEventListener('change', function () {
     if (!this.value) return;
     setActiveTf(this.value);
-    loadSymbol(state.symbol, this.value);
+    loadSymbol(current, this.value);
   });
 
   $('#chart-type').addEventListener('change', function () {
@@ -431,11 +546,12 @@
   });
 
   $('#btn-shot').addEventListener('click', function () {
-    var cv = chart.snapshot(state.symbol + ' · ' + state.interval.toUpperCase() + ' — LibreCharts');
+    var name = current ? current.s : 'grafico';
+    var cv = chart.snapshot(name + ' · ' + state.interval.toUpperCase() + ' — LibreCharts');
     cv.toBlob(function (blob) {
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = state.symbol + '_' + state.interval + '.png';
+      a.download = name + '_' + state.interval + '.png';
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
     });
@@ -462,28 +578,34 @@
 
   // ---------- lista de seguimiento ----------
   var wlPrices = {};
+  function watchDescs() {
+    return state.watchlist.map(function (k) { return TV.Catalog.get(k) || TV.Catalog.resolve(k); }).filter(Boolean);
+  }
+
   function renderWatchlist() {
     var box = $('#watchlist');
     box.innerHTML = '';
-    state.watchlist.forEach(function (sym) {
+    watchDescs().forEach(function (d) {
+      var k = TV.Catalog.key(d);
       var el = document.createElement('div');
-      el.className = 'wl-item' + (sym === state.symbol ? ' active' : '');
-      el.dataset.sym = sym;
-      var p = wlPrices[sym];
+      el.className = 'wl-item' + (k === state.symbol ? ' active' : '');
+      el.dataset.k = k;
+      var p = wlPrices[k];
       el.innerHTML =
-        '<span class="wl-sym">' + esc(sym) + '</span>' +
+        '<span class="wl-sym"><span class="wl-name">' + esc(d.s) + '</span>' +
+        '<span class="wl-mkt mkt-' + d.mkt + '">' + esc(mktShort(d)) + '</span></span>' +
         '<span class="wl-px">' + (p ? TV.fmtN(p.px, TV.decimalsFor(p.px)) : '—') + '</span>' +
         '<span class="wl-chg ' + (p && p.pct < 0 ? 'down' : 'up') + '">' + (p ? (p.pct >= 0 ? '+' : '') + p.pct.toFixed(2) + '%' : '') + '</span>' +
         '<button class="wl-del" title="Quitar">✕</button>';
       el.addEventListener('click', function (ev) {
         if (ev.target.classList.contains('wl-del')) {
-          state.watchlist = state.watchlist.filter(function (s) { return s !== sym; });
+          state.watchlist = state.watchlist.filter(function (x) { return x !== k; });
           renderWatchlist();
           startTickers();
           persist();
           return;
         }
-        loadSymbol(sym, state.interval);
+        loadSymbol(d, state.interval);
       });
       box.appendChild(el);
     });
@@ -491,10 +613,10 @@
 
   function startTickers() {
     tickers.demo = feed.demoMode;
-    tickers.onTick = function (sym, px, pct) {
-      var prev = wlPrices[sym];
-      wlPrices[sym] = { px: px, pct: pct };
-      var el = document.querySelector('.wl-item[data-sym="' + sym + '"]');
+    tickers.onTick = function (k, px, pct) {
+      var prev = wlPrices[k];
+      wlPrices[k] = { px: px, pct: pct };
+      var el = document.querySelector('.wl-item[data-k="' + k + '"]');
       if (!el) return;
       el.querySelector('.wl-px').textContent = TV.fmtN(px, TV.decimalsFor(px));
       var chgEl = el.querySelector('.wl-chg');
@@ -506,18 +628,24 @@
         el.classList.add(px > prev.px ? 'wl-flash-up' : 'wl-flash-down');
       }
     };
-    tickers.watch(state.watchlist);
+    tickers.watch(watchDescs());
   }
 
   function addToWatchlist() {
-    var v = ($('#wl-input').value || '').toUpperCase().trim();
+    var v = ($('#wl-input').value || '').trim();
     if (!v) return;
-    if (!/^[A-Z0-9]{5,14}$/.test(v)) { toast('Símbolo no válido'); return; }
-    if (state.watchlist.indexOf(v) < 0) {
-      state.watchlist.push(v);
+    // Un ticker ambiguo (AAPL es acción en Nasdaq y CEDEAR en BYMA) se resuelve
+    // al mercado que se está mirando.
+    var pref = current ? current.mkt : null;
+    var d = TV.Catalog.resolve(v, pref) || TV.Catalog.improvise(v, null, pref);
+    if (!d) { toast('Símbolo no válido'); return; }
+    var k = TV.Catalog.key(d);
+    if (state.watchlist.indexOf(k) < 0) {
+      state.watchlist.push(k);
       renderWatchlist();
       startTickers();
       persist();
+      toast(d.s + ' añadido (' + mktLabel(d) + ')');
     }
     $('#wl-input').value = '';
   }
@@ -556,9 +684,10 @@
   });
   rebuildIndLegend();
 
-  loadSymbol(state.symbol, state.interval);
+  var startDesc = TV.Catalog.get(state.symbol) || TV.Catalog.resolve(state.symbol) || TV.Catalog.get('crypto:BTCUSDT');
+  loadSymbol(startDesc, state.interval);
+  renderWatchlist();
 
-  // los tickers necesitan saber si estamos en modo demo: espera a la primera carga
   var tickerStart = setInterval(function () {
     if (chart.candles.length) {
       clearInterval(tickerStart);
@@ -566,5 +695,13 @@
     }
   }, 700);
 
-  window.App = { chart: chart, feed: feed, state: state, addIndicator: addIndicator };
+  // Completa el catálogo argentino con lo que realmente cotiza hoy.
+  TV.Data.discoverArgentina().then(function (added) {
+    if (added) console.info('LibreCharts: ' + added + ' activos argentinos descubiertos en vivo.');
+  }).catch(function () { /* sin red: queda el catálogo estático */ });
+
+  window.App = {
+    chart: chart, feed: feed, state: state, catalog: TV.Catalog,
+    addIndicator: addIndicator, loadSymbol: loadSymbol
+  };
 })();
