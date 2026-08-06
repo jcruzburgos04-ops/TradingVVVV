@@ -16,6 +16,8 @@
 
   var BINANCE_REST = 'https://api.binance.com/api/v3';
   var BINANCE_WS = 'wss://stream.binance.com:9443';
+  var BYBIT_REST = 'https://api.bybit.com/v5/market';
+  var BYBIT_WS = 'wss://stream.bybit.com/v5/public/';
   var YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/';
   var STOOQ = 'https://stooq.com/q/d/l/';
   var DATA912 = 'https://data912.com';
@@ -23,7 +25,8 @@
   var INTERVAL_MS = {
     '1m': 60e3, '3m': 180e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3,
     '1h': 3600e3, '2h': 7200e3, '4h': 14400e3, '6h': 21600e3, '8h': 28800e3,
-    '12h': 43200e3, '1d': 86400e3, '3d': 259200e3, '1w': 604800e3, '1M': 2592000e3
+    '12h': 43200e3, '1d': 86400e3, '3d': 259200e3, '1w': 604800e3, '1M': 2592000e3,
+    '3M': 7776000e3
   };
 
   // Cómo pedirle cada temporalidad a Yahoo. `agg` agrupa velas del lado del
@@ -43,10 +46,22 @@
     '1d': { i: '1d', r: 'max', agg: 1 },
     '3d': { i: '1d', r: 'max', agg: 3 },
     '1w': { i: '1wk', r: 'max', agg: 1 },
-    '1M': { i: '1mo', r: 'max', agg: 1 }
+    '1M': { i: '1mo', r: 'max', agg: 1 },
+    '3M': { i: '3mo', r: 'max', agg: 1 }
   };
 
-  var settings = { proxy: '' };
+  // Temporalidades de Bybit. Las que no publica (8h, 3d) se arman agrupando.
+  var BYBIT_MAP = {
+    '1m': { i: '1', agg: 1 }, '3m': { i: '3', agg: 1 }, '5m': { i: '5', agg: 1 },
+    '15m': { i: '15', agg: 1 }, '30m': { i: '30', agg: 1 }, '1h': { i: '60', agg: 1 },
+    '2h': { i: '120', agg: 1 }, '4h': { i: '240', agg: 1 }, '6h': { i: '360', agg: 1 },
+    '8h': { i: '240', agg: 2 }, '12h': { i: '720', agg: 1 }, '1d': { i: 'D', agg: 1 },
+    '3d': { i: 'D', agg: 3 }, '1w': { i: 'W', agg: 1 }, '1M': { i: 'M', agg: 1 },
+    '3M': { i: 'M', agg: 3 }
+  };
+
+  // preferCrypto: 'bybit' (por omisión, es donde opera el usuario) o 'binance'.
+  var settings = { proxy: '', preferCrypto: 'bybit' };
 
   function applyProxy(url) {
     var p = settings.proxy;
@@ -115,6 +130,51 @@
     }
   };
 
+  // ---------- fuente: Bybit (cripto: perpetuos y spot) ----------
+  // El usuario opera en Bybit, así que sus perpetuos son el precio que ve en
+  // pantalla. Se prueba primero `linear` (perpetuo USDT) y luego `spot`.
+  var Bybit = {
+    id: 'bybit',
+    label: 'Bybit',
+    // En los perpetuos, las monedas de precio muy chico cotizan multiplicadas
+    // por mil (SHIB → 1000SHIB). Se pide con ese nombre y se divide al leer.
+    perpName: function (s) {
+      return { SHIBUSDT: '1000SHIBUSDT', PEPEUSDT: '1000PEPEUSDT', BONKUSDT: '1000BONKUSDT' }[s] || s;
+    },
+    scaleOf: function (s, category) {
+      return category === 'linear' && /^(SHIB|PEPE|BONK)USDT$/.test(s) ? 1000 : 1;
+    },
+    categoriesFor: function (desc) {
+      return desc.bybitSpotOnly ? ['spot'] : ['linear', 'spot'];
+    },
+    fetchOne: function (desc, interval, category) {
+      var m = BYBIT_MAP[interval] || BYBIT_MAP['1h'];
+      var sym = category === 'linear' ? Bybit.perpName(desc.s) : desc.s;
+      var scale = Bybit.scaleOf(desc.s, category);
+      var url = BYBIT_REST + '/kline?category=' + category + '&symbol=' + encodeURIComponent(sym) +
+        '&interval=' + m.i + '&limit=1000';
+      return getJSON(url).then(function (j) {
+        if (!j || j.retCode !== 0 || !j.result || !Array.isArray(j.result.list) || !j.result.list.length) {
+          throw new Error(j && j.retMsg ? j.retMsg : 'sin datos');
+        }
+        // Bybit devuelve de la vela más nueva a la más vieja.
+        var out = j.result.list.slice().reverse().map(function (k) {
+          return {
+            time: +k[0], open: +k[1] / scale, high: +k[2] / scale,
+            low: +k[3] / scale, close: +k[4] / scale, volume: +k[5]
+          };
+        });
+        return { candles: aggregate(cleanCandles(out), m.agg), category: category };
+      });
+    },
+    klines: function (desc, interval) {
+      var cats = Bybit.categoriesFor(desc);
+      return cats.reduce(function (p, cat) {
+        return p.catch(function () { return Bybit.fetchOne(desc, interval, cat); });
+      }, Promise.reject(new Error('inicio')));
+    }
+  };
+
   // ---------- fuente: Yahoo Finance (acciones, ETF, bonos, índices) ----------
   var Yahoo = {
     id: 'yahoo',
@@ -152,11 +212,11 @@
     id: 'stooq',
     label: 'Stooq',
     supports: function (desc, interval) {
-      return desc.mkt === 'us' && ['1d', '3d', '1w', '1M'].indexOf(interval) >= 0 &&
+      return desc.mkt === 'us' && ['1d', '3d', '1w', '1M', '3M'].indexOf(interval) >= 0 &&
         desc.type !== 'index' && desc.type !== 'fx';
     },
     klines: function (desc, interval) {
-      var i = interval === '1w' ? 'w' : interval === '1M' ? 'm' : 'd';
+      var i = interval === '1w' ? 'w' : (interval === '1M' || interval === '3M') ? 'm' : 'd';
       var url = STOOQ + '?s=' + encodeURIComponent(desc.s.toLowerCase()) + '.us&i=' + i;
       return getText(url).then(function (csv) {
         var lines = csv.trim().split('\n');
@@ -170,7 +230,7 @@
             open: +c[1], high: +c[2], low: +c[3], close: +c[4], volume: +(c[5] || 0)
           });
         }
-        return aggregate(cleanCandles(out), interval === '3d' ? 3 : 1);
+        return aggregate(cleanCandles(out), interval === '3d' || interval === '3M' ? 3 : 1);
       });
     }
   };
@@ -390,12 +450,24 @@
 
     var chain;
     if (desc.mkt === 'crypto') {
-      chain = [function () {
+      var viaBybit = function () {
+        return Bybit.klines(desc, interval).then(function (r) {
+          self.source = Bybit;
+          self.cryptoCategory = r.category;
+          return r.candles.slice(-limit);
+        });
+      };
+      var viaBinance = function () {
         return Binance.klines(desc, interval, { limit: limit }).then(function (c) {
           self.source = Binance;
+          self.cryptoCategory = 'spot';
           return c;
         });
-      }];
+      };
+      // Bybit primero si el usuario opera ahí; si no responde, Binance.
+      chain = settings.preferCrypto === 'binance'
+        ? [viaBinance, viaBybit]
+        : [viaBybit, viaBinance];
     } else if (desc.derived) {
       chain = [function () { return self._loadDerived(desc, interval, limit); }];
     } else {
@@ -429,9 +501,27 @@
   };
 
   Feed.prototype.loadOlder = function (desc, interval, beforeTime, limit) {
-    // Solo Binance permite paginar hacia atrás; el resto ya entrega el máximo
-    // histórico disponible en la primera carga.
+    // Cripto pagina hacia atrás; en acciones y bonos la primera carga ya trae
+    // todo el histórico que publica la fuente.
     if (this.demoMode || desc.mkt !== 'crypto') return Promise.resolve([]);
+    if (this.source === Bybit) {
+      var m = BYBIT_MAP[interval] || BYBIT_MAP['1h'];
+      var cat = this.cryptoCategory || 'linear';
+      var sym = cat === 'linear' ? Bybit.perpName(desc.s) : desc.s;
+      var scale = Bybit.scaleOf(desc.s, cat);
+      var url = BYBIT_REST + '/kline?category=' + cat + '&symbol=' + encodeURIComponent(sym) +
+        '&interval=' + m.i + '&limit=1000&end=' + (beforeTime - 1);
+      return getJSON(url).then(function (j) {
+        if (!j || j.retCode !== 0 || !j.result || !j.result.list) return [];
+        var out = j.result.list.slice().reverse().map(function (k) {
+          return {
+            time: +k[0], open: +k[1] / scale, high: +k[2] / scale,
+            low: +k[3] / scale, close: +k[4] / scale, volume: +k[5]
+          };
+        });
+        return aggregate(cleanCandles(out), m.agg);
+      }).catch(function () { return []; });
+    }
     return Binance.klines(desc, interval, { limit: limit || 1000, endTime: beforeTime - 1 })
       .catch(function () { return []; });
   };
@@ -440,8 +530,73 @@
   Feed.prototype.openLive = function (desc, interval, onCandle) {
     this.closeLive();
     if (this.demoMode) { this._openDemoLive(desc, interval, onCandle); return; }
-    if (desc.mkt === 'crypto') { this._openBinanceLive(desc, interval, onCandle); return; }
+    if (desc.mkt === 'crypto') {
+      if (this.source === Bybit) this._openBybitLive(desc, interval, onCandle);
+      else this._openBinanceLive(desc, interval, onCandle);
+      return;
+    }
     this._openPollLive(desc, interval, onCandle);
+  };
+
+  Feed.prototype._openBybitLive = function (desc, interval, onCandle) {
+    var self = this;
+    var m = BYBIT_MAP[interval] || BYBIT_MAP['1h'];
+    var cat = this.cryptoCategory || 'linear';
+
+    // Las temporalidades que se arman agrupando (8h, 3d) no tienen un canal
+    // propio: para esas se re-consulta el histórico cada tanto.
+    if (m.agg > 1) {
+      var poll = function () {
+        Bybit.klines(desc, interval).then(function (r) {
+          var last = r.candles[r.candles.length - 1];
+          if (last) { self._status('live', Bybit.label); onCandle(last); }
+        }).catch(function () { });
+      };
+      this._status('connecting');
+      poll();
+      this.pollTimer = setInterval(poll, 15000);
+      return;
+    }
+
+    var sym = cat === 'linear' ? Bybit.perpName(desc.s) : desc.s;
+    var scale = Bybit.scaleOf(desc.s, cat);
+    var topic = 'kline.' + m.i + '.' + sym;
+    this._status('connecting');
+
+    function connect() {
+      var ws;
+      try { ws = new WebSocket(BYBIT_WS + cat); } catch (e) { self._openBinanceLive(desc, interval, onCandle); return; }
+      self.ws = ws;
+      ws.onopen = function () {
+        self.retry = 0;
+        ws.send(JSON.stringify({ op: 'subscribe', args: [topic] }));
+        self._status('live', Bybit.label);
+        // Bybit cierra la conexión si no recibe señales de vida.
+        self.pingTimer = setInterval(function () {
+          if (ws.readyState === 1) ws.send(JSON.stringify({ op: 'ping' }));
+        }, 20000);
+      };
+      ws.onmessage = function (ev) {
+        try {
+          var m2 = JSON.parse(ev.data);
+          if (!m2.topic || m2.topic.indexOf('kline.') !== 0 || !m2.data) return;
+          m2.data.forEach(function (k) {
+            onCandle({
+              time: +k.start, open: +k.open / scale, high: +k.high / scale,
+              low: +k.low / scale, close: +k.close / scale, volume: +k.volume
+            });
+          });
+        } catch (e) { /* mensaje no reconocido */ }
+      };
+      ws.onclose = function () {
+        if (self.pingTimer) { clearInterval(self.pingTimer); self.pingTimer = null; }
+        if (self.ws !== ws) return;
+        self._status('connecting');
+        self.wsTimer = setTimeout(connect, Math.min(30000, 1000 * Math.pow(2, self.retry++)));
+      };
+      ws.onerror = function () { try { ws.close(); } catch (e) { } };
+    }
+    connect();
   };
 
   Feed.prototype._openBinanceLive = function (desc, interval, onCandle) {
@@ -546,6 +701,7 @@
 
   Feed.prototype.closeLive = function () {
     if (this.ws) { var w = this.ws; this.ws = null; try { w.close(); } catch (e) { } }
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     if (this.wsTimer) { clearTimeout(this.wsTimer); this.wsTimer = null; }
     if (this.demoTimer) { clearInterval(this.demoTimer); this.demoTimer = null; }
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
@@ -607,6 +763,57 @@
   };
 
   Tickers.prototype._watchCrypto = function (descs) {
+    if (settings.preferCrypto !== 'binance') this._watchBybit(descs);
+    else this._watchBinance(descs);
+  };
+
+  // Cotizaciones de Bybit; si el canal no abre, se cae a Binance.
+  Tickers.prototype._watchBybit = function (descs) {
+    var self = this;
+    var linear = descs.filter(function (d) { return !d.bybitSpotOnly; });
+    if (!linear.length) { this._watchBinance(descs); return; }
+
+    var byTopic = {};
+    var args = linear.map(function (d) {
+      var sym = Bybit.perpName(d.s);
+      byTopic[sym] = { key: 'crypto:' + d.s, scale: Bybit.scaleOf(d.s, 'linear') };
+      return 'tickers.' + sym;
+    });
+
+    var ws, got = false;
+    try { ws = new WebSocket(BYBIT_WS + 'linear'); } catch (e) { this._watchBinance(descs); return; }
+    this.ws = ws;
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ op: 'subscribe', args: args }));
+      self.pingTimer = setInterval(function () {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ op: 'ping' }));
+      }, 20000);
+    };
+    ws.onmessage = function (ev) {
+      try {
+        var m = JSON.parse(ev.data);
+        if (!m.topic || m.topic.indexOf('tickers.') !== 0 || !m.data) return;
+        var info = byTopic[m.topic.slice(8)];
+        if (!info || !self.onTick) return;
+        var px = m.data.lastPrice != null ? +m.data.lastPrice : null;
+        if (px == null || !isFinite(px)) return;
+        got = true;
+        var pct = m.data.price24hPcnt != null ? +m.data.price24hPcnt * 100 : 0;
+        self.onTick(info.key, px / info.scale, pct);
+      } catch (e) { }
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) { } };
+    ws.onclose = function () {
+      if (self.pingTimer) { clearInterval(self.pingTimer); self.pingTimer = null; }
+      if (self.ws !== ws) return;
+      self.ws = null;
+      // Si nunca llegó un precio, la fuente no sirve en este navegador.
+      if (!got) self._watchBinance(descs);
+      else self.timer = setTimeout(function () { self.watch(self._descs); }, 5000);
+    };
+  };
+
+  Tickers.prototype._watchBinance = function (descs) {
     var self = this;
     var streams = descs.map(function (d) { return d.s.toLowerCase() + '@miniTicker'; }).join('/');
     var ws;
@@ -650,6 +857,7 @@
 
   Tickers.prototype.stop = function () {
     if (this.ws) { var w = this.ws; this.ws = null; try { w.close(); } catch (e) { } }
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     [this.timer, this.arTimer, this.usTimer].forEach(function (t) {
       if (t) { clearTimeout(t); clearInterval(t); }
     });
@@ -663,6 +871,6 @@
     generateDemo: generateDemo,
     discoverArgentina: discoverArgentina,
     settings: settings,
-    sources: { Binance: Binance, Yahoo: Yahoo, Stooq: Stooq, Data912: Data912 }
+    sources: { Bybit: Bybit, Binance: Binance, Yahoo: Yahoo, Stooq: Stooq, Data912: Data912 }
   };
 })();

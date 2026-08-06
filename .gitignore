@@ -2,3 +2,6 @@
 Thumbs.db
 node_modules/
 *.log
+
+# Archivos generados por tools/build-single.mjs
+dist/

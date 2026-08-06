@@ -45,21 +45,22 @@
     return 8;
   }
 
+  // Formato argentino: punto para los miles y coma para los decimales.
   function fmtN(v, dec) {
     if (v == null || !isFinite(v)) return '—';
-    var s = v.toFixed(dec);
-    var parts = s.split('.');
-    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-    return parts.join('.');
+    var neg = v < 0;
+    var parts = Math.abs(v).toFixed(dec).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return (neg ? '-' : '') + parts.join(',');
   }
 
   function fmtVol(v) {
     if (v == null || !isFinite(v)) return '—';
     var a = Math.abs(v);
-    if (a >= 1e9) return (v / 1e9).toFixed(2) + ' B';
-    if (a >= 1e6) return (v / 1e6).toFixed(2) + ' M';
-    if (a >= 1e3) return (v / 1e3).toFixed(2) + ' K';
-    return v.toFixed(2);
+    if (a >= 1e9) return fmtN(v / 1e9, 2) + ' B';
+    if (a >= 1e6) return fmtN(v / 1e6, 2) + ' M';
+    if (a >= 1e3) return fmtN(v / 1e3, 2) + ' K';
+    return fmtN(v, 2);
   }
 
   function niceStep(raw) {
@@ -139,6 +140,9 @@
     this.tool = 'cursor';
     this.selection = null;
     this._drawState = null;
+    this.magnet = false;      // pegar los puntos a O/H/L/C de la vela
+    this._undo = [];          // pilas de deshacer / rehacer
+    this._redo = [];
 
     // interacción
     this._mouse = null;
@@ -1036,6 +1040,7 @@
   Chart._dseq = 1;
 
   Chart.prototype.clearDrawings = function () {
+    this._pushUndo();
     this.drawings = [];
     this.selection = null;
     this.requestRender();
@@ -1044,6 +1049,7 @@
 
   Chart.prototype.deleteSelected = function () {
     if (!this.selection) return;
+    this._pushUndo();
     var id = this.selection.id;
     this.drawings = this.drawings.filter(function (d) { return d.id !== id; });
     this.selection = null;
@@ -1059,10 +1065,78 @@
   };
 
   Chart.prototype._screenToData = function (x, y, scale) {
-    return {
-      t: this.timeForIndex(this.indexAt(x - this.barW / 2)),
-      price: scale.invert(y)
-    };
+    var fi = this.indexAt(x - this.barW / 2);
+    var price = scale.invert(y);
+    if (this.magnet) {
+      // Con el imán activo el punto salta al O/H/L/C más cercano de la vela,
+      // que es como se marcan los niveles en las plataformas de bolsa.
+      var i = clamp(Math.round(fi), 0, this.candles.length - 1);
+      var k = this.display[i] || this.candles[i];
+      if (k) {
+        var best = null, bestD = Infinity;
+        [k.open, k.high, k.low, k.close].forEach(function (v) {
+          var d = Math.abs(scale.y(v) - y);
+          if (d < bestD) { bestD = d; best = v; }
+        });
+        if (best != null && bestD < 22) {
+          return { t: this.timeForIndex(i), price: best };
+        }
+      }
+    }
+    return { t: this.timeForIndex(fi), price: price };
+  };
+
+  // ---------- deshacer / rehacer de dibujos ----------
+  Chart.prototype._snapshot = function () {
+    return JSON.stringify(this.drawings.map(function (d) {
+      return { id: d.id, type: d.type, p1: d.p1, p2: d.p2, color: d.color };
+    }));
+  };
+
+  Chart.prototype._pushUndo = function () {
+    this._undo.push(this._snapshot());
+    if (this._undo.length > 60) this._undo.shift();
+    this._redo.length = 0;
+  };
+
+  Chart.prototype._restore = function (json) {
+    this.drawings = JSON.parse(json);
+    this.selection = null;
+    this.requestRender();
+    if (this.opts.onDrawingsChange) this.opts.onDrawingsChange();
+  };
+
+  Chart.prototype.undo = function () {
+    if (!this._undo.length) return false;
+    this._redo.push(this._snapshot());
+    this._restore(this._undo.pop());
+    return true;
+  };
+
+  Chart.prototype.redo = function () {
+    if (!this._redo.length) return false;
+    this._undo.push(this._snapshot());
+    this._restore(this._redo.pop());
+    return true;
+  };
+
+  // Encuadra el gráfico en una ventana de tiempo (barra inferior de rangos).
+  Chart.prototype.zoomToRange = function (ms) {
+    var n = this.candles.length;
+    if (!n) return;
+    var plotW = this._plotW();
+    if (ms == null) {
+      this.barW = clamp(plotW / n, 0.5, 60);
+      this.rightIndex = n - 1 + Math.max(2, Math.round(plotW / this.barW * 0.03));
+      this.requestRender();
+      return;
+    }
+    var lastT = this.candles[n - 1].time;
+    var fromIdx = this.indexForTime(lastT - ms);
+    var bars = Math.max(5, (n - 1) - fromIdx);
+    this.barW = clamp(plotW / (bars * 1.06), 0.4, 60);
+    this.rightIndex = n - 1 + Math.max(2, Math.round(plotW / this.barW * 0.04));
+    this.requestRender();
   };
 
   Chart.prototype._renderDrawings = function (ctx, scale, plotW, pane) {
@@ -1257,6 +1331,7 @@
         if (p.y <= pane0.top + pane0.h && p.x <= self._plotW()) {
           var dp = self._screenToData(p.x, p.y, m);
           if (self.tool === 'hline' || self.tool === 'vline') {
+            self._pushUndo();
             self.drawings.push({ id: 'd' + (Chart._dseq++), type: self.tool, p1: dp, p2: null, color: '#2962ff' });
             self.setTool('cursor');
             if (self.opts.onToolDone) self.opts.onToolDone();
@@ -1266,6 +1341,7 @@
             self._drawState = { tool: self.tool, p1: dp };
           } else {
             var d2 = self._screenToData(p.x, p.y, m);
+            self._pushUndo();
             self.drawings.push({ id: 'd' + (Chart._dseq++), type: self._drawState.tool, p1: self._drawState.p1, p2: d2, color: '#2962ff' });
             self._drawState = null;
             self.setTool('cursor');
@@ -1282,6 +1358,7 @@
       if (hitD) {
         self.selection = hitD.dr;
         self._pan = null;
+        self._pushUndo();
         self._dragDraw = {
           dr: hitD.dr, handle: hitD.handle,
           startX: p.x, startY: p.y,

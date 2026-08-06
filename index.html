@@ -4,23 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LibreCharts — Gráficos sin límites</title>
-<meta name="description" content="Plataforma de gráficos financieros gratuita: indicadores ilimitados, herramientas de dibujo ilimitadas, datos en vivo. Sin cuentas, sin planes de pago.">
+<meta name="description" content="Plataforma de gráficos financieros gratuita: indicadores ilimitados, acciones argentinas y de EE.UU., bonos, CEDEARs y cripto. Sin cuentas, sin planes de pago.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23131722'/%3E%3Cpath d='M5 22 L11 14 L16 18 L27 6' stroke='%232962ff' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M5 27 L27 27' stroke='%2326a69a' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="theme-dark">
 
+<!-- ============ barra superior ============ -->
 <header class="topbar">
   <div class="brand" title="LibreCharts — sin límites">
-    <svg width="22" height="22" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="var(--accent)"/><path d="M6 22 L12 14 L17 18 L26 7" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <span class="brand-name">LibreCharts</span>
-    <span class="brand-tag">∞ sin límites</span>
+    <svg width="20" height="20" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="var(--accent)"/><path d="M6 22 L12 14 L17 18 L26 7" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </div>
 
-  <button id="btn-symbol" class="tb-btn symbol-btn" title="Buscar símbolo (S)">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+  <button id="btn-symbol" class="tb-btn symbol-btn" title="Buscar activo (S)">
+    <span id="cur-logo" class="cur-logo"></span>
     <span id="cur-symbol">BTCUSDT</span>
-    <span id="cur-mkt" class="mkt-chip"></span>
+  </button>
+  <button id="btn-add-wl" class="tb-btn icon" title="Añadir a la lista de seguimiento">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
   </button>
 
   <div class="sep"></div>
@@ -29,39 +30,65 @@
     <button class="tb-btn tf" data-tf="1m">1m</button>
     <button class="tb-btn tf" data-tf="5m">5m</button>
     <button class="tb-btn tf" data-tf="15m">15m</button>
-    <button class="tb-btn tf active" data-tf="1h">1h</button>
+    <button class="tb-btn tf" data-tf="30m">30m</button>
+    <button class="tb-btn tf" data-tf="1h">1h</button>
+    <button class="tb-btn tf" data-tf="2h">2h</button>
     <button class="tb-btn tf" data-tf="4h">4h</button>
-    <button class="tb-btn tf" data-tf="1d">1D</button>
-    <button class="tb-btn tf" data-tf="1w">1S</button>
-    <button class="tb-btn tf" data-tf="1M">1M</button>
-    <select id="tf-extra" class="tb-select" title="Más temporalidades">
-      <option value="">···</option>
-      <option value="3m">3 minutos</option>
-      <option value="30m">30 minutos</option>
-      <option value="2h">2 horas</option>
-      <option value="6h">6 horas</option>
-      <option value="8h">8 horas</option>
-      <option value="12h">12 horas</option>
-      <option value="3d">3 días</option>
-    </select>
+    <button class="tb-btn tf" data-tf="1d">D</button>
+    <button class="tb-btn tf" data-tf="1w">S</button>
+    <button class="tb-btn tf" data-tf="1M">M</button>
+    <button class="tb-btn tf" data-tf="3M">3M</button>
+    <div class="menu-wrap">
+      <button class="tb-btn icon chev" id="tf-more" title="Más temporalidades">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="menu" id="tf-menu" hidden>
+        <button data-tf="3m">3 minutos</button>
+        <button data-tf="6h">6 horas</button>
+        <button data-tf="8h">8 horas</button>
+        <button data-tf="12h">12 horas</button>
+        <button data-tf="3d">3 días</button>
+      </div>
+    </div>
   </div>
 
   <div class="sep"></div>
 
-  <select id="chart-type" class="tb-select" title="Tipo de gráfico">
-    <option value="candles">Velas</option>
-    <option value="heikin">Heikin Ashi</option>
-    <option value="bars">Barras OHLC</option>
-    <option value="line">Línea</option>
-    <option value="area">Área</option>
-  </select>
+  <div class="menu-wrap">
+    <button class="tb-btn" id="btn-type" title="Tipo de gráfico">
+      <span id="type-icon"></span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="menu" id="type-menu" hidden>
+      <button data-type="candles">Velas</button>
+      <button data-type="heikin">Heikin Ashi</button>
+      <button data-type="bars">Barras OHLC</button>
+      <button data-type="line">Línea</button>
+      <button data-type="area">Área</button>
+    </div>
+  </div>
 
   <div class="sep"></div>
 
-  <button id="btn-indicators" class="tb-btn accent" title="Indicadores ilimitados (I)">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17s3-8 6-8 3 5 6 5 6-9 6-9"/></svg>
-    Indicadores
+  <button id="btn-indicators" class="tb-btn" title="Indicadores ilimitados (I)">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17s3-8 6-8 3 5 6 5 6-9 6-9"/></svg>
+    <span class="hide-sm">Indicadores</span>
     <span id="ind-badge" class="badge" hidden>0</span>
+  </button>
+
+  <button id="btn-alerts" class="tb-btn" title="Alertas de precio">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
+    <span class="hide-sm">Alerta</span>
+    <span id="alert-badge" class="badge" hidden>0</span>
+  </button>
+
+  <div class="sep hide-sm"></div>
+
+  <button id="btn-undo" class="tb-btn icon hide-sm" title="Deshacer dibujo (Ctrl+Z)">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+  </button>
+  <button id="btn-redo" class="tb-btn icon hide-sm" title="Rehacer dibujo (Ctrl+Y)">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
   </button>
 
   <div class="flex-fill"></div>
@@ -70,18 +97,21 @@
     <span class="dot"></span><span id="conn-text">Conectando…</span>
   </div>
   <button id="btn-sources" class="tb-btn icon" title="Fuentes de datos">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
   </button>
-  <button id="btn-theme" class="tb-btn icon" title="Cambiar tema">◐</button>
+  <button id="btn-theme" class="tb-btn icon" title="Cambiar tema">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none"/></svg>
+  </button>
   <button id="btn-shot" class="tb-btn icon" title="Capturar imagen del gráfico">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
   </button>
   <button id="btn-full" class="tb-btn icon" title="Pantalla completa">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
   </button>
 </header>
 
 <main class="layout">
+  <!-- ============ herramientas de dibujo ============ -->
   <aside class="tools">
     <button class="tool active" data-tool="cursor" title="Cursor / seleccionar">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
@@ -105,11 +135,15 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/></svg>
     </button>
     <div class="tool-sep"></div>
+    <button class="tool" id="btn-magnet" title="Imán: pegar los dibujos a los precios de la vela">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 8h4M14 8h4"/></svg>
+    </button>
     <button class="tool danger" id="btn-clear-draw" title="Borrar todos los dibujos">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
     </button>
   </aside>
 
+  <!-- ============ gráfico ============ -->
   <section class="chart-wrap">
     <div id="legend" class="legend">
       <div id="legend-main" class="legend-row main"></div>
@@ -117,30 +151,85 @@
     </div>
     <div id="chart-mount" class="chart-mount"></div>
     <div id="loading" class="loading" hidden><div class="spinner"></div><span>Cargando datos…</span></div>
+
+    <!-- selector de rango, como la barra inferior de TradingView -->
+    <div class="rangebar">
+      <button class="range" data-range="1D">1D</button>
+      <button class="range" data-range="5D">5D</button>
+      <button class="range" data-range="1M">1M</button>
+      <button class="range" data-range="3M">3M</button>
+      <button class="range" data-range="6M">6M</button>
+      <button class="range" data-range="YTD">YTD</button>
+      <button class="range" data-range="1A">1A</button>
+      <button class="range" data-range="5A">5A</button>
+      <button class="range" data-range="ALL">Todos</button>
+      <span class="flex-fill"></span>
+      <span class="rb-info">Fuente: <b id="sb-source">—</b></span>
+      <span class="rb-sep"></span>
+      <span id="sb-clock" class="rb-info"></span>
+    </div>
   </section>
 
-  <aside class="watchlist" id="watchlist-panel">
-    <div class="wl-head">
-      <span>Lista de seguimiento</span>
-      <span class="wl-inf" title="Añade tantos símbolos como quieras">∞</span>
-    </div>
-    <div class="wl-addrow">
-      <input id="wl-input" type="text" placeholder="GGAL, AL30, AAPL, BTCUSDT…" autocomplete="off" spellcheck="false">
-      <button id="wl-add" title="Añadir a la lista">+</button>
-    </div>
-    <div id="watchlist" class="wl-list"></div>
+  <!-- ============ panel derecho ============ -->
+  <aside class="sidepanel" id="sidepanel">
+    <section class="panel" id="panel-watchlist">
+      <div class="panel-head">
+        <span class="panel-title">Lista de seguimiento</span>
+        <span class="wl-inf" title="Añadí tantos activos como quieras">∞</span>
+      </div>
+      <div class="wl-addrow">
+        <input id="wl-input" type="text" placeholder="GGAL, AL30, AAPL, BTCUSDT…" autocomplete="off" spellcheck="false">
+        <button id="wl-add" title="Añadir a la lista">+</button>
+      </div>
+      <div class="wl-cols">
+        <span class="c-sym">Símbolo</span>
+        <span class="c-px">Última</span>
+        <span class="c-chg">Cambio %</span>
+      </div>
+      <div id="watchlist" class="wl-list"></div>
+    </section>
+
+    <section class="panel" id="panel-data" hidden>
+      <div class="panel-head"><span class="panel-title">Ventana de datos</span></div>
+      <div id="datawindow" class="dw-list"></div>
+    </section>
+
+    <section class="panel" id="panel-alerts" hidden>
+      <div class="panel-head"><span class="panel-title">Alertas de precio</span></div>
+      <div class="al-addrow">
+        <input id="al-price" type="number" step="any" placeholder="Precio…" autocomplete="off">
+        <select id="al-dir">
+          <option value="above">Cruce hacia arriba</option>
+          <option value="below">Cruce hacia abajo</option>
+        </select>
+        <button id="al-add">Crear</button>
+      </div>
+      <div id="alerts-list" class="al-list"></div>
+    </section>
   </aside>
+
+  <!-- barra vertical de paneles -->
+  <nav class="rail">
+    <button class="rail-btn active" data-panel="watchlist" title="Lista de seguimiento">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    </button>
+    <button class="rail-btn" data-panel="data" title="Ventana de datos">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>
+    </button>
+    <button class="rail-btn" data-panel="alerts" title="Alertas de precio">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
+    </button>
+    <div class="rail-sep"></div>
+    <button class="rail-btn" id="rail-indicators" title="Indicadores">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 17s3-8 6-8 3 5 6 5 6-9 6-9"/></svg>
+    </button>
+    <button class="rail-btn" id="rail-sources" title="Fuentes de datos">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+    </button>
+  </nav>
 </main>
 
-<footer class="statusbar">
-  <span id="sb-left">Fuente: <b id="sb-source">—</b> · Proyecto libre — no afiliado a TradingView, BYMA ni Binance</span>
-  <span class="flex-fill"></span>
-  <span id="sb-hint">Rueda: zoom · Arrastrar: mover · Doble clic: reiniciar vista</span>
-  <span class="sep"></span>
-  <span id="sb-clock"></span>
-</footer>
-
-<!-- Modal: búsqueda de símbolo -->
+<!-- ============ modales ============ -->
 <div id="modal-symbol" class="modal" hidden>
   <div class="modal-card">
     <div class="modal-head">
@@ -153,12 +242,39 @@
     <div class="sym-foot">
       <span id="sym-count"></span>
       <span class="flex-fill"></span>
-      <span id="sym-hint" class="muted-hint">Escribí cualquier ticker aunque no esté en la lista</span>
+      <span class="muted-hint">Escribí cualquier ticker aunque no esté en la lista</span>
     </div>
   </div>
 </div>
 
-<!-- Modal: fuentes de datos -->
+<div id="modal-ind" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <input id="ind-q" type="text" placeholder="Buscar indicador…" autocomplete="off" spellcheck="false">
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="ind-meta">
+      <span id="ind-count">0 indicadores activos</span>
+      <span class="ind-nolimit">Sin límite — añadí todos los que quieras ∞</span>
+      <button id="ind-clear" class="mini-btn danger">Quitar todos</button>
+    </div>
+    <div id="ind-list" class="ind-list"></div>
+  </div>
+</div>
+
+<div id="modal-settings" class="modal" hidden>
+  <div class="modal-card small">
+    <div class="modal-head">
+      <span id="set-title" class="modal-title">Configuración</span>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div id="set-form" class="set-form"></div>
+    <div class="modal-foot">
+      <button id="set-apply" class="mini-btn accent">Aplicar</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-sources" class="modal" hidden>
   <div class="modal-card small">
     <div class="modal-head">
@@ -166,7 +282,13 @@
       <button class="modal-close" data-close>✕</button>
     </div>
     <div class="set-form">
-      <div class="src-row"><b>Cripto</b><span>Binance — REST + WebSocket</span></div>
+      <div class="set-row">
+        <label for="src-crypto">Cripto</label>
+        <select id="src-crypto">
+          <option value="bybit">Bybit (perpetuos) · respaldo Binance</option>
+          <option value="binance">Binance (spot) · respaldo Bybit</option>
+        </select>
+      </div>
       <div class="src-row"><b>Acciones, ETF, bonos e índices</b><span>Yahoo Finance (BYMA con sufijo <code>.BA</code>)</span></div>
       <div class="src-row"><b>Respaldo diario EE.UU.</b><span>Stooq (CSV)</span></div>
       <div class="src-row"><b>Precios en vivo de BYMA</b><span>data912 — API pública</span></div>
@@ -178,6 +300,12 @@
         <label for="src-proxy">Proxy CORS (opcional)</label>
         <input id="src-proxy" type="text" class="wide" placeholder="https://mi-proxy.example/?{url}" autocomplete="off" spellcheck="false">
         <small class="muted-hint">Si tu navegador bloquea alguna fuente por CORS, poné acá tu propio proxy. Usá <code>{url}</code> como marcador; si no lo incluís, se antepone.</small>
+      </div>
+
+      <div class="set-row col">
+        <label for="src-logos">Proveedor de logos (opcional)</label>
+        <input id="src-logos" type="text" class="wide" placeholder="https://logos.example/{s}.png" autocomplete="off" spellcheck="false">
+        <small class="muted-hint">Vacío = íconos dibujados en la propia página. Con <code>{s}</code> se reemplaza el ticker.</small>
       </div>
 
       <div class="set-row">
@@ -196,42 +324,13 @@
   </div>
 </div>
 
-<!-- Modal: indicadores -->
-<div id="modal-ind" class="modal" hidden>
-  <div class="modal-card">
-    <div class="modal-head">
-      <input id="ind-q" type="text" placeholder="Buscar indicador…" autocomplete="off" spellcheck="false">
-      <button class="modal-close" data-close>✕</button>
-    </div>
-    <div class="ind-meta">
-      <span id="ind-count">0 indicadores activos</span>
-      <span class="ind-nolimit">Sin límite — añade todos los que quieras ∞</span>
-      <button id="ind-clear" class="mini-btn danger">Quitar todos</button>
-    </div>
-    <div id="ind-list" class="ind-list"></div>
-  </div>
-</div>
-
-<!-- Modal: configuración de un indicador -->
-<div id="modal-settings" class="modal" hidden>
-  <div class="modal-card small">
-    <div class="modal-head">
-      <span id="set-title" class="modal-title">Configuración</span>
-      <button class="modal-close" data-close>✕</button>
-    </div>
-    <div id="set-form" class="set-form"></div>
-    <div class="modal-foot">
-      <button id="set-apply" class="mini-btn accent">Aplicar</button>
-    </div>
-  </div>
-</div>
-
 <div id="toast" class="toast" hidden></div>
 
 <script src="js/catalog-crypto.js"></script>
 <script src="js/catalog-us.js"></script>
 <script src="js/catalog-ar.js"></script>
 <script src="js/catalog.js"></script>
+<script src="js/logos.js"></script>
 <script src="js/indicators.js"></script>
 <script src="js/data.js"></script>
 <script src="js/engine.js"></script>

@@ -3,17 +3,25 @@
   'use strict';
   var TV = window.TV;
   var $ = function (s) { return document.querySelector(s); };
-  var LS_KEY = 'librecharts.v2';
+  var LS_KEY = 'librecharts.v3';
 
   // ---------- estado ----------
   var state = {
-    symbol: 'ar:GGAL',
-    interval: '1d',
+    symbol: 'crypto:BTCUSDT',
+    interval: '5m',
     type: 'candles',
     theme: 'dark',
     proxy: '',
+    logos: '',
+    preferCrypto: 'bybit',
+    magnet: false,
+    panel: 'watchlist',
     indicators: [{ key: 'volume', params: null, colors: null }],
-    watchlist: ['ar:GGAL', 'ar:YPFD', 'ar:AL30', 'ar:GD30', 'ar:MEP', 'us:SPY', 'us:AAPL', 'crypto:BTCUSDT'],
+    watchlist: ['crypto:BTCUSDT', 'crypto:ETHUSDT', 'crypto:SOLUSDT',
+      'ar:GGAL', 'ar:YPFD', 'ar:AL30', 'ar:GD30', 'ar:MEP',
+      'us:SPY', 'us:QQQ', 'us:AAPL'],
+    closedGroups: [],
+    alerts: [],
     drawings: {}
   };
 
@@ -27,6 +35,8 @@
   } catch (e) { }
 
   TV.Data.settings.proxy = state.proxy || '';
+  TV.Data.settings.preferCrypto = state.preferCrypto || 'bybit';
+  TV.Logos.setProvider(state.logos || '');
 
   var saveTimer = null;
   function persist() {
@@ -45,11 +55,11 @@
 
   var feed = new TV.Data.Feed();
   var tickers = new TV.Data.Tickers();
-  var current = null;   // activo mostrado (descriptor del catálogo)
+  var current = null;
 
   var chart = new TV.Chart($('#chart-mount'), {
     theme: state.theme,
-    onCrosshair: updateLegend,
+    onCrosshair: onCrosshair,
     onLayout: positionIndLegends,
     onNeedHistory: loadOlder,
     onDrawingsChange: persist,
@@ -58,6 +68,7 @@
   });
 
   chart.stack.appendChild($('#legend'));
+  chart.magnet = !!state.magnet;
 
   // ---------- conexión ----------
   feed.onStatus = function (s, label) {
@@ -80,11 +91,10 @@
     state.interval = interval;
 
     $('#cur-symbol').textContent = desc.s;
-    var chip = $('#cur-mkt');
-    chip.textContent = mktLabel(desc);
-    chip.className = 'mkt-chip mkt-' + desc.mkt;
-    document.title = desc.s + ' · ' + interval.toUpperCase() + ' — LibreCharts';
+    $('#cur-logo').innerHTML = TV.Logos.html(desc, 18, true);
+    document.title = desc.s + ' · ' + tfLabel(interval) + ' — LibreCharts';
     $('#loading').hidden = false;
+    setActiveTf(interval);
     feed.closeLive();
 
     feed.load(desc, interval, 1000).then(function (candles) {
@@ -101,11 +111,13 @@
       feed.openLive(desc, interval, function (k) {
         if (seq !== loadSeq) return;
         chart.mergeLive(k);
+        checkAlerts(k.close);
         updateLegend(null);
       });
       updateLegend(null);
-      persist();
       renderWatchlist();
+      renderAlerts();
+      persist();
     });
   }
 
@@ -123,10 +135,6 @@
     return d.mkt === 'ar' ? 'BYMA' : d.mkt === 'us' ? 'EE.UU.' : 'Cripto';
   }
 
-  function mktShort(d) {
-    return d.mkt === 'ar' ? 'AR' : d.mkt === 'us' ? 'US' : 'CR';
-  }
-
   function ccySymbol(d) {
     if (!d) return '';
     if (d.ccy === 'ARS') return '$';
@@ -134,34 +142,50 @@
     return '';
   }
 
+  var TF_LABELS = {
+    '1m': '1 min', '3m': '3 min', '5m': '5 min', '15m': '15 min', '30m': '30 min',
+    '1h': '1 hora', '2h': '2 horas', '4h': '4 horas', '6h': '6 horas', '8h': '8 horas',
+    '12h': '12 horas', '1d': 'Diario', '3d': '3 días', '1w': 'Semanal',
+    '1M': 'Mensual', '3M': 'Trimestral'
+  };
+  function tfLabel(tf) { return TF_LABELS[tf] || tf; }
+
   // ---------- leyenda ----------
-  function fmtPct(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'; }
+  function fmtPct(v) { return (v >= 0 ? '+' : '') + TV.fmtN(v, 2) + '%'; }
 
   function updateLegend(idx) {
     if (!chart) return;
     var c = chart.candles;
-    if (!c.length) return;
+    if (!c.length || !current) return;
     var i = idx == null ? c.length - 1 : idx;
     var k = chart.display[i] || c[i];
     if (!k) return;
     var prev = i > 0 ? (chart.display[i - 1] || c[i - 1]) : k;
-    var chg = prev.close ? (k.close - prev.close) / prev.close * 100 : 0;
+    var diff = k.close - prev.close;
+    var chg = prev.close ? diff / prev.close * 100 : 0;
     var cls = k.close >= k.open ? 'up' : 'down';
     var dec = chart.decimals;
     var cur = ccySymbol(current);
-    var volRow = current && (current.type === 'fx' || current.type === 'index')
+    var src = feed.source ? feed.source.label : '';
+    var cat = feed.cryptoCategory === 'linear' ? 'Contrato perpetuo' : null;
+
+    var vol = (current.type === 'fx' || current.type === 'index')
       ? '' : '<span class="muted">Vol</span><span>' + TV.fmtVol(k.volume) + '</span>';
 
     $('#legend-main').innerHTML =
-      '<span class="sym">' + esc(current ? current.s : '') + '</span>' +
-      '<span class="muted">' + esc(current ? mktLabel(current) : '') + '</span>' +
-      '<span class="muted">' + esc(state.interval.toUpperCase()) + '</span>' +
-      '<span class="muted">O</span><span class="' + cls + '">' + cur + TV.fmtN(k.open, dec) + '</span>' +
-      '<span class="muted">H</span><span class="' + cls + '">' + cur + TV.fmtN(k.high, dec) + '</span>' +
-      '<span class="muted">L</span><span class="' + cls + '">' + cur + TV.fmtN(k.low, dec) + '</span>' +
-      '<span class="muted">C</span><span class="' + cls + '">' + cur + TV.fmtN(k.close, dec) + '</span>' +
-      '<span class="' + (chg >= 0 ? 'up' : 'down') + '">' + fmtPct(chg) + '</span>' +
-      volRow;
+      '<span class="lg-logo">' + TV.Logos.html(current, 16, true) + '</span>' +
+      '<span class="sym">' + esc(current.s) + '</span>' +
+      '<span class="desc">' + esc(cat || current.n) + '</span>' +
+      '<span class="muted">·</span><span class="muted">' + esc(tfLabel(state.interval)) + '</span>' +
+      (src ? '<span class="src-tag">' + esc(src) + '</span>' : '') +
+      '<span class="ohlc">' +
+      '<span class="muted">O</span> <span class="' + cls + '">' + cur + TV.fmtN(k.open, dec) + '</span> ' +
+      '<span class="muted">H</span> <span class="' + cls + '">' + cur + TV.fmtN(k.high, dec) + '</span> ' +
+      '<span class="muted">L</span> <span class="' + cls + '">' + cur + TV.fmtN(k.low, dec) + '</span> ' +
+      '<span class="muted">C</span> <span class="' + cls + '">' + cur + TV.fmtN(k.close, dec) + '</span> ' +
+      '<span class="' + (diff >= 0 ? 'up' : 'down') + '">' + (diff >= 0 ? '+' : '') + TV.fmtN(diff, dec) +
+      ' (' + fmtPct(chg) + ')</span></span>' +
+      vol;
 
     chart.indicators.forEach(function (ins) {
       var row = document.getElementById('lg-' + ins.id);
@@ -175,6 +199,11 @@
         }).join(' ');
       }
     });
+  }
+
+  function onCrosshair(idx) {
+    updateLegend(idx);
+    if (state.panel === 'data') renderDataWindow(idx);
   }
 
   function esc(s) {
@@ -240,21 +269,18 @@
   function syncIndicators() {
     rebuildIndLegend();
     renderIndModalCounts();
+    if (state.panel === 'data') renderDataWindow(null);
     persist();
   }
 
-  function addIndicator(key, params, colors) {
-    chart.addIndicator(key, params, colors);
-  }
+  function addIndicator(key, params, colors) { chart.addIndicator(key, params, colors); }
 
   function renderIndModalCounts() {
     var n = chart.indicators.length;
     $('#ind-count').textContent = n + (n === 1 ? ' indicador activo' : ' indicadores activos');
     document.querySelectorAll('.ind-item').forEach(function (el) {
-      var key = el.dataset.key;
-      var cnt = chart.indicators.filter(function (i) { return i.key === key; }).length;
-      var badge = el.querySelector('.i-count');
-      badge.textContent = cnt ? '× ' + cnt : '';
+      var cnt = chart.indicators.filter(function (i) { return i.key === el.dataset.key; }).length;
+      el.querySelector('.i-count').textContent = cnt ? '× ' + cnt : '';
     });
   }
 
@@ -262,8 +288,7 @@
     var list = $('#ind-list');
     var q = ($('#ind-q').value || '').toLowerCase().trim();
     list.innerHTML = '';
-    var cats = [['overlay', 'Superposiciones (sobre el precio)'], ['oscillator', 'Osciladores (panel propio)']];
-    cats.forEach(function (cat) {
+    [['overlay', 'Superposiciones (sobre el precio)'], ['oscillator', 'Osciladores (panel propio)']].forEach(function (cat) {
       var defs = TV.Indicators.defs.filter(function (d) {
         return d.cat === cat[0] && (!q || d.name.toLowerCase().indexOf(q) >= 0 || d.short.toLowerCase().indexOf(q) >= 0);
       });
@@ -350,7 +375,7 @@
     closeModals();
   });
 
-  // ---------- modales ----------
+  // ---------- modales y menús ----------
   function openModal(sel) {
     closeModals();
     $(sel).hidden = false;
@@ -369,9 +394,18 @@
   document.querySelectorAll('[data-close]').forEach(function (b) {
     b.addEventListener('click', closeModals);
   });
-  window.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape') closeModals();
+
+  function closeMenus() {
+    document.querySelectorAll('.menu').forEach(function (m) { m.hidden = true; });
+  }
+  document.addEventListener('mousedown', function (ev) {
+    if (!ev.target.closest('.menu-wrap')) closeMenus();
   });
+  function toggleMenu(sel) {
+    var m = $(sel), wasHidden = m.hidden;
+    closeMenus();
+    m.hidden = !wasHidden;
+  }
 
   // ---------- búsqueda de activos ----------
   var symFilter = { mkt: 'all', type: 'all' };
@@ -397,7 +431,9 @@
       ? TV.Catalog.AR_GROUPS
       : symFilter.mkt === 'us'
         ? [{ id: 'stock', label: 'Acciones' }, { id: 'etf', label: 'ETF' }, { id: 'adr', label: 'ADR argentinos' }, { id: 'index', label: 'Índices' }]
-        : [];
+        : symFilter.mkt === 'crypto'
+          ? [{ id: 'bybit', label: 'Operables en Bybit' }]
+          : [];
     if (!groups.length) { tBox.hidden = true; return; }
     tBox.hidden = false;
     [{ id: 'all', label: 'Todos' }].concat(groups).forEach(function (g) {
@@ -418,15 +454,23 @@
     var list = $('#sym-list');
     list.innerHTML = '';
 
-    var results = TV.Catalog.search(q, symFilter.mkt, symFilter.type, 120);
+    var type = symFilter.type;
+    var onlyBybit = type === 'bybit';
+    var results = TV.Catalog.search(q, symFilter.mkt, onlyBybit ? 'all' : type, 160);
+    if (onlyBybit) results = results.filter(function (d) { return d.bybit; });
+    results = results.slice(0, 120);
+
     results.forEach(function (d) {
       var el = document.createElement('div');
       el.className = 'sym-item';
       el.innerHTML =
+        '<span class="s-logo">' + TV.Logos.html(d, 22, true) + '</span>' +
         '<span class="s-sym">' + esc(d.s) + '</span>' +
         '<span class="s-name">' + esc(d.n) + '</span>' +
+        (d.bybit ? '<span class="s-tag bybit">' + (d.bybitSpotOnly ? 'Bybit spot' : 'Bybit') + '</span>' : '') +
         '<span class="s-tag mkt-' + d.mkt + '">' + esc(mktLabel(d)) + '</span>' +
-        '<span class="s-tag">' + esc(TV.Catalog.typeLabel(d)) + '</span>';
+        // En cripto el tipo repite al mercado; no se muestra dos veces.
+        (d.type === 'crypto' ? '' : '<span class="s-tag">' + esc(TV.Catalog.typeLabel(d)) + '</span>');
       el.addEventListener('click', function () {
         closeModals();
         loadSymbol(d, state.interval);
@@ -434,14 +478,14 @@
       list.appendChild(el);
     });
 
-    // Un ticker que no está en el catálogo igual se puede abrir.
     if (q && !results.some(function (d) { return d.s.toUpperCase() === q.toUpperCase(); })) {
       var el2 = document.createElement('div');
       el2.className = 'sym-item custom';
-      el2.innerHTML = '<span class="s-sym">' + esc(q.toUpperCase()) + '</span>' +
+      el2.innerHTML = '<span class="s-logo">' + TV.Logos.html({ s: q.toUpperCase(), mkt: symFilter.mkt === 'all' ? 'us' : symFilter.mkt, type: 'stock' }, 22, false) + '</span>' +
+        '<span class="s-sym">' + esc(q.toUpperCase()) + '</span>' +
         '<span class="s-name">Abrir como símbolo escrito a mano</span><span class="s-tag">nuevo</span>';
       el2.addEventListener('click', function () {
-        var d = TV.Catalog.improvise(q, symFilter.mkt === 'all' ? null : symFilter.mkt);
+        var d = TV.Catalog.improvise(q, symFilter.mkt === 'all' ? null : symFilter.mkt, current && current.mkt);
         if (d) { closeModals(); loadSymbol(d, state.interval); }
       });
       list.appendChild(el2);
@@ -465,6 +509,8 @@
   // ---------- fuentes de datos ----------
   function openSources() {
     $('#src-proxy').value = state.proxy || '';
+    $('#src-logos').value = state.logos || '';
+    $('#src-crypto').value = state.preferCrypto || 'bybit';
     var st = TV.Catalog.stats();
     $('#src-stats').textContent =
       st.total + ' (Argentina ' + (st.ar || 0) + ' · EE.UU. ' + (st.us || 0) + ' · cripto ' + (st.crypto || 0) + ')';
@@ -491,7 +537,11 @@
 
   $('#src-apply').addEventListener('click', function () {
     state.proxy = ($('#src-proxy').value || '').trim();
+    state.logos = ($('#src-logos').value || '').trim();
+    state.preferCrypto = $('#src-crypto').value;
     TV.Data.settings.proxy = state.proxy;
+    TV.Data.settings.preferCrypto = state.preferCrypto;
+    TV.Logos.setProvider(state.logos);
     persist();
     closeModals();
     toast('Fuentes actualizadas, recargando datos…');
@@ -503,34 +553,68 @@
   $('#btn-symbol').addEventListener('click', function () { openModal('#modal-symbol'); });
   $('#btn-indicators').addEventListener('click', function () { openModal('#modal-ind'); });
   $('#btn-sources').addEventListener('click', function () { openModal('#modal-sources'); });
+  $('#rail-indicators').addEventListener('click', function () { openModal('#modal-ind'); });
+  $('#rail-sources').addEventListener('click', function () { openModal('#modal-sources'); });
+  $('#btn-alerts').addEventListener('click', function () { showPanel('alerts'); });
+  $('#btn-add-wl').addEventListener('click', function () {
+    if (!current) return;
+    var k = TV.Catalog.key(current);
+    if (state.watchlist.indexOf(k) >= 0) { toast(current.s + ' ya está en la lista'); return; }
+    state.watchlist.push(k);
+    renderWatchlist();
+    startTickers();
+    persist();
+    toast(current.s + ' añadido a la lista');
+  });
+
   $('#ind-clear').addEventListener('click', function () {
     if (!chart.indicators.length) { toast('No hay indicadores que quitar'); return; }
     chart.clearIndicators();
   });
 
   function setActiveTf(tf) {
+    var known = false;
     document.querySelectorAll('.tb-btn.tf').forEach(function (b) {
-      b.classList.toggle('active', b.dataset.tf === tf);
+      var on = b.dataset.tf === tf;
+      b.classList.toggle('active', on);
+      if (on) known = true;
     });
-    $('#tf-extra').value = ['3m', '30m', '2h', '6h', '8h', '12h', '3d'].indexOf(tf) >= 0 ? tf : '';
+    document.querySelectorAll('#tf-menu button').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.tf === tf);
+    });
+    $('#tf-more').classList.toggle('active', !known);
   }
   document.querySelectorAll('.tb-btn.tf').forEach(function (b) {
+    b.addEventListener('click', function () { loadSymbol(current, b.dataset.tf); });
+  });
+  $('#tf-more').addEventListener('click', function (ev) { ev.stopPropagation(); toggleMenu('#tf-menu'); });
+  document.querySelectorAll('#tf-menu button').forEach(function (b) {
     b.addEventListener('click', function () {
-      setActiveTf(b.dataset.tf);
+      closeMenus();
       loadSymbol(current, b.dataset.tf);
     });
   });
-  $('#tf-extra').addEventListener('change', function () {
-    if (!this.value) return;
-    setActiveTf(this.value);
-    loadSymbol(current, this.value);
-  });
 
-  $('#chart-type').addEventListener('change', function () {
-    state.type = this.value;
-    chart.setType(this.value);
+  var TYPE_ICONS = {
+    candles: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 4v3m0 10v3M17 3v5m0 8v4"/><rect x="4.5" y="7" width="5" height="10" rx="1"/><rect x="14.5" y="8" width="5" height="8" rx="1"/></svg>',
+    heikin: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 4v3m0 10v3M17 3v5m0 8v4"/><rect x="4.5" y="7" width="5" height="10" rx="1" fill="currentColor" fill-opacity=".25"/><rect x="14.5" y="8" width="5" height="8" rx="1" fill="currentColor" fill-opacity=".25"/></svg>',
+    bars: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 4v16M4 8h3m0 5h3M17 4v16M14 9h3m0 5h3"/></svg>',
+    line: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 9-9"/></svg>',
+    area: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 3 9-9"/><path d="M3 17l5-6 4 3 9-9v14H3z" fill="currentColor" fill-opacity=".22" stroke="none"/></svg>'
+  };
+  function setChartType(t) {
+    state.type = t;
+    chart.setType(t);
+    $('#type-icon').innerHTML = TYPE_ICONS[t] || TYPE_ICONS.candles;
+    document.querySelectorAll('#type-menu button').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.type === t);
+    });
     updateLegend(null);
     persist();
+  }
+  $('#btn-type').addEventListener('click', function (ev) { ev.stopPropagation(); toggleMenu('#type-menu'); });
+  document.querySelectorAll('#type-menu button').forEach(function (b) {
+    b.addEventListener('click', function () { closeMenus(); setChartType(b.dataset.type); });
   });
 
   $('#btn-theme').addEventListener('click', function () {
@@ -547,7 +631,7 @@
 
   $('#btn-shot').addEventListener('click', function () {
     var name = current ? current.s : 'grafico';
-    var cv = chart.snapshot(name + ' · ' + state.interval.toUpperCase() + ' — LibreCharts');
+    var cv = chart.snapshot(name + ' · ' + tfLabel(state.interval) + ' — LibreCharts');
     cv.toBlob(function (blob) {
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -556,6 +640,31 @@
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
     });
     toast('Imagen del gráfico descargada 📷');
+  });
+
+  $('#btn-undo').addEventListener('click', function () {
+    if (!chart.undo()) toast('No hay nada que deshacer');
+  });
+  $('#btn-redo').addEventListener('click', function () {
+    if (!chart.redo()) toast('No hay nada que rehacer');
+  });
+
+  // ---------- rangos ----------
+  var RANGES = {
+    '1D': 86400e3, '5D': 5 * 86400e3, '1M': 30 * 86400e3, '3M': 91 * 86400e3,
+    '6M': 182 * 86400e3, '1A': 365 * 86400e3, '5A': 5 * 365 * 86400e3, 'ALL': null
+  };
+  document.querySelectorAll('.range').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var r = b.dataset.range;
+      var ms;
+      if (r === 'YTD') {
+        var now = new Date();
+        ms = now - Date.UTC(now.getUTCFullYear(), 0, 1);
+      } else ms = RANGES[r];
+      chart.zoomToRange(ms);
+      document.querySelectorAll('.range').forEach(function (x) { x.classList.toggle('on', x === b); });
+    });
   });
 
   // ---------- herramientas de dibujo ----------
@@ -575,6 +684,30 @@
     chart.clearDrawings();
     toast('Dibujos eliminados');
   });
+  $('#btn-magnet').addEventListener('click', function () {
+    state.magnet = !state.magnet;
+    chart.magnet = state.magnet;
+    this.classList.toggle('active', state.magnet);
+    toast(state.magnet ? 'Imán activado: los dibujos se pegan a O/H/L/C' : 'Imán desactivado');
+    persist();
+  });
+
+  // ---------- panel derecho ----------
+  function showPanel(name) {
+    state.panel = name;
+    ['watchlist', 'data', 'alerts'].forEach(function (p) {
+      $('#panel-' + p).hidden = p !== name;
+    });
+    document.querySelectorAll('.rail-btn[data-panel]').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.panel === name);
+    });
+    if (name === 'data') renderDataWindow(null);
+    if (name === 'alerts') renderAlerts();
+    persist();
+  }
+  document.querySelectorAll('.rail-btn[data-panel]').forEach(function (b) {
+    b.addEventListener('click', function () { showPanel(b.dataset.panel); });
+  });
 
   // ---------- lista de seguimiento ----------
   var wlPrices = {};
@@ -582,32 +715,59 @@
     return state.watchlist.map(function (k) { return TV.Catalog.get(k) || TV.Catalog.resolve(k); }).filter(Boolean);
   }
 
+  var GROUP_LABEL = { ar: 'Argentina', us: 'Estados Unidos', crypto: 'Cripto' };
+
   function renderWatchlist() {
     var box = $('#watchlist');
     box.innerHTML = '';
+    var groups = {};
     watchDescs().forEach(function (d) {
-      var k = TV.Catalog.key(d);
-      var el = document.createElement('div');
-      el.className = 'wl-item' + (k === state.symbol ? ' active' : '');
-      el.dataset.k = k;
-      var p = wlPrices[k];
-      el.innerHTML =
-        '<span class="wl-sym"><span class="wl-name">' + esc(d.s) + '</span>' +
-        '<span class="wl-mkt mkt-' + d.mkt + '">' + esc(mktShort(d)) + '</span></span>' +
-        '<span class="wl-px">' + (p ? TV.fmtN(p.px, TV.decimalsFor(p.px)) : '—') + '</span>' +
-        '<span class="wl-chg ' + (p && p.pct < 0 ? 'down' : 'up') + '">' + (p ? (p.pct >= 0 ? '+' : '') + p.pct.toFixed(2) + '%' : '') + '</span>' +
-        '<button class="wl-del" title="Quitar">✕</button>';
-      el.addEventListener('click', function (ev) {
-        if (ev.target.classList.contains('wl-del')) {
-          state.watchlist = state.watchlist.filter(function (x) { return x !== k; });
-          renderWatchlist();
-          startTickers();
-          persist();
-          return;
-        }
-        loadSymbol(d, state.interval);
+      (groups[d.mkt] = groups[d.mkt] || []).push(d);
+    });
+
+    ['crypto', 'ar', 'us'].forEach(function (mkt) {
+      var items = groups[mkt];
+      if (!items || !items.length) return;
+      var closed = state.closedGroups.indexOf(mkt) >= 0;
+
+      var head = document.createElement('div');
+      head.className = 'wl-group' + (closed ? ' closed' : '');
+      head.innerHTML = '<svg class="caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>' +
+        esc(GROUP_LABEL[mkt] || mkt) + ' <span style="opacity:.6">(' + items.length + ')</span>';
+      head.addEventListener('click', function () {
+        var i = state.closedGroups.indexOf(mkt);
+        if (i >= 0) state.closedGroups.splice(i, 1); else state.closedGroups.push(mkt);
+        renderWatchlist();
+        persist();
       });
-      box.appendChild(el);
+      box.appendChild(head);
+      if (closed) return;
+
+      items.forEach(function (d) {
+        var k = TV.Catalog.key(d);
+        var el = document.createElement('div');
+        el.className = 'wl-item' + (k === state.symbol ? ' active' : '');
+        el.dataset.k = k;
+        var p = wlPrices[k];
+        el.innerHTML =
+          '<span class="wl-sym">' + TV.Logos.html(d, 20, true) +
+          '<span class="wl-name">' + esc(d.s) + '</span></span>' +
+          '<span class="wl-px">' + (p ? TV.fmtN(p.px, TV.decimalsFor(p.px)) : '—') + '</span>' +
+          '<span class="wl-chg ' + (p && p.pct < 0 ? 'down' : 'up') + '">' +
+          (p ? (p.pct >= 0 ? '+' : '') + TV.fmtN(p.pct, 2) + '%' : '') + '</span>' +
+          '<button class="wl-del" title="Quitar">✕</button>';
+        el.addEventListener('click', function (ev) {
+          if (ev.target.classList.contains('wl-del')) {
+            state.watchlist = state.watchlist.filter(function (x) { return x !== k; });
+            renderWatchlist();
+            startTickers();
+            persist();
+            return;
+          }
+          loadSymbol(d, state.interval);
+        });
+        box.appendChild(el);
+      });
     });
   }
 
@@ -620,7 +780,7 @@
       if (!el) return;
       el.querySelector('.wl-px').textContent = TV.fmtN(px, TV.decimalsFor(px));
       var chgEl = el.querySelector('.wl-chg');
-      chgEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+      chgEl.textContent = (pct >= 0 ? '+' : '') + TV.fmtN(pct, 2) + '%';
       chgEl.className = 'wl-chg ' + (pct < 0 ? 'down' : 'up');
       if (prev && Math.abs(prev.px - px) > 1e-12) {
         el.classList.remove('wl-flash-up', 'wl-flash-down');
@@ -634,8 +794,6 @@
   function addToWatchlist() {
     var v = ($('#wl-input').value || '').trim();
     if (!v) return;
-    // Un ticker ambiguo (AAPL es acción en Nasdaq y CEDEAR en BYMA) se resuelve
-    // al mercado que se está mirando.
     var pref = current ? current.mkt : null;
     var d = TV.Catalog.resolve(v, pref) || TV.Catalog.improvise(v, null, pref);
     if (!d) { toast('Símbolo no válido'); return; }
@@ -652,6 +810,136 @@
   $('#wl-add').addEventListener('click', addToWatchlist);
   $('#wl-input').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') addToWatchlist(); });
 
+  // Nombres legibles de las series que publica cada indicador.
+  var OUT_LABELS = {
+    v: 'Valor', ma: 'Media', basis: 'Media', up: 'Banda superior', lo: 'Banda inferior',
+    dn: 'Bajista', h: 'Histograma', macd: 'MACD', sig: 'Señal', k: '%K', d: '%D',
+    adx: 'ADX', dip: '+DI', dim: '−DI', tenkan: 'Tenkan-sen', kijun: 'Kijun-sen',
+    chikou: 'Chikou span', sa: 'Senkou A', sb: 'Senkou B'
+  };
+
+  // ---------- ventana de datos ----------
+  function renderDataWindow(idx) {
+    var box = $('#datawindow');
+    var c = chart.candles;
+    if (!c.length || !current) { box.innerHTML = '<div class="al-empty">Sin datos.</div>'; return; }
+    var i = idx == null ? c.length - 1 : idx;
+    var k = chart.display[i] || c[i];
+    if (!k) return;
+    var prev = i > 0 ? (chart.display[i - 1] || c[i - 1]) : k;
+    var diff = k.close - prev.close;
+    var chg = prev.close ? diff / prev.close * 100 : 0;
+    var dec = chart.decimals;
+    var cur = ccySymbol(current);
+    var d = new Date(k.time);
+    var fecha = ('0' + d.getUTCDate()).slice(-2) + '/' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '/' + d.getUTCFullYear();
+    if (TV.Data.INTERVAL_MS[state.interval] < 86400e3) {
+      fecha += ' ' + ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2);
+    }
+
+    var html = '<div class="dw-sec">' + esc(current.s) + ' · ' + esc(tfLabel(state.interval)) + '</div>' +
+      row('Fecha', fecha) +
+      row('Apertura', cur + TV.fmtN(k.open, dec)) +
+      row('Máximo', cur + TV.fmtN(k.high, dec)) +
+      row('Mínimo', cur + TV.fmtN(k.low, dec)) +
+      row('Cierre', cur + TV.fmtN(k.close, dec)) +
+      row('Variación', '<span class="' + (diff >= 0 ? 'lg-up' : 'lg-dn') + '">' +
+        (diff >= 0 ? '+' : '') + TV.fmtN(diff, dec) + ' (' + fmtPct(chg) + ')</span>') +
+      row('Volumen', TV.fmtVol(k.volume));
+
+    chart.indicators.forEach(function (ins) {
+      var vals = chart.indicatorValuesAt(ins, i);
+      if (!vals.length) return;
+      html += '<div class="dw-sec">' + esc(chart.indicatorLabel(ins)) + '</div>';
+      var outs = ins.result ? ins.result.outputs.filter(function (o) { return o.kind !== 'fill' && o.kind !== 'cloud'; }) : [];
+      vals.forEach(function (v, n) {
+        var key = outs[n] && outs[n].key ? outs[n].key : 'v';
+        html += row(OUT_LABELS[key] || key, '<span style="color:' + esc(v.color || 'inherit') + '">' +
+          (v.vol ? TV.fmtVol(v.v) : TV.fmtN(v.v, 4)) + '</span>');
+      });
+    });
+    box.innerHTML = html;
+
+    function row(a, b) {
+      return '<div class="dw-row"><span>' + esc(a) + '</span><b>' + b + '</b></div>';
+    }
+  }
+
+  // ---------- alertas de precio ----------
+  function renderAlerts() {
+    var box = $('#alerts-list');
+    var mine = state.alerts;
+    var badge = $('#alert-badge');
+    var pend = mine.filter(function (a) { return !a.fired; }).length;
+    badge.hidden = pend === 0;
+    badge.textContent = pend;
+
+    if (!mine.length) {
+      box.innerHTML = '<div class="al-empty">Todavía no creaste alertas. Poné un precio arriba y se avisa cuando el activo lo cruce.</div>';
+      return;
+    }
+    box.innerHTML = '';
+    mine.slice().reverse().forEach(function (a) {
+      var d = TV.Catalog.get(a.key);
+      var el = document.createElement('div');
+      el.className = 'al-item' + (a.fired ? ' fired' : '');
+      el.innerHTML =
+        '<span class="al-sym">' + esc(d ? d.s : a.key) + '</span>' +
+        '<span class="al-cond">' + (a.dir === 'above' ? '≥ ' : '≤ ') + TV.fmtN(a.price, 4) +
+        (a.fired ? ' · disparada' : '') + '</span>' +
+        '<button class="al-del" title="Quitar">✕</button>';
+      el.querySelector('.al-del').addEventListener('click', function () {
+        state.alerts = state.alerts.filter(function (x) { return x.id !== a.id; });
+        renderAlerts();
+        persist();
+      });
+      box.appendChild(el);
+    });
+  }
+
+  $('#al-add').addEventListener('click', function () {
+    var px = parseFloat($('#al-price').value);
+    if (!isFinite(px) || !current) { toast('Poné un precio válido'); return; }
+    state.alerts.push({
+      id: 'a' + Date.now(),
+      key: TV.Catalog.key(current),
+      price: px,
+      dir: $('#al-dir').value,
+      fired: false
+    });
+    $('#al-price').value = '';
+    renderAlerts();
+    persist();
+    toast('Alerta creada para ' + current.s);
+    if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+  });
+
+  var lastClose = null;
+  function checkAlerts(close) {
+    if (!current || close == null) return;
+    var key = TV.Catalog.key(current);
+    var prev = lastClose;
+    lastClose = close;
+    if (prev == null) return;
+    var changed = false;
+    state.alerts.forEach(function (a) {
+      if (a.fired || a.key !== key) return;
+      var hit = a.dir === 'above' ? (prev < a.price && close >= a.price)
+        : (prev > a.price && close <= a.price);
+      if (!hit) return;
+      a.fired = true;
+      changed = true;
+      var msg = current.s + ' cruzó ' + TV.fmtN(a.price, chart.decimals);
+      toast('🔔 ' + msg);
+      try {
+        if (window.Notification && Notification.permission === 'granted') {
+          new Notification('LibreCharts', { body: msg });
+        }
+      } catch (e) { }
+    });
+    if (changed) { renderAlerts(); persist(); }
+  }
+
   // ---------- varios ----------
   var toastTimer = null;
   function toast(msg) {
@@ -665,19 +953,27 @@
   setInterval(function () {
     var d = new Date();
     $('#sb-clock').textContent =
-      ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2) + ':' + ('0' + d.getUTCSeconds()).slice(-2) + ' UTC';
+      ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2) + ':' +
+      ('0' + d.getUTCSeconds()).slice(-2) + ' UTC';
   }, 1000);
 
   window.addEventListener('keydown', function (ev) {
-    if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'SELECT' || ev.target.tagName === 'TEXTAREA')) return;
+    var t = ev.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    if (ev.key === 'Escape') { closeModals(); closeMenus(); return; }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') { ev.preventDefault(); chart.undo(); return; }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') { ev.preventDefault(); chart.redo(); return; }
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (ev.key === 's' || ev.key === 'S') openModal('#modal-symbol');
     else if (ev.key === 'i' || ev.key === 'I') openModal('#modal-ind');
+    else if (ev.key === 'a' || ev.key === 'A') showPanel('alerts');
   });
 
   // ---------- arranque ----------
-  $('#chart-type').value = state.type;
-  chart.setType(state.type);
+  setChartType(state.type);
   setActiveTf(state.interval);
+  showPanel(state.panel || 'watchlist');
+  $('#btn-magnet').classList.toggle('active', !!state.magnet);
 
   (state.indicators || []).forEach(function (d) {
     chart.addIndicator(d.key, d.params, d.colors);
@@ -687,6 +983,7 @@
   var startDesc = TV.Catalog.get(state.symbol) || TV.Catalog.resolve(state.symbol) || TV.Catalog.get('crypto:BTCUSDT');
   loadSymbol(startDesc, state.interval);
   renderWatchlist();
+  renderAlerts();
 
   var tickerStart = setInterval(function () {
     if (chart.candles.length) {
@@ -695,13 +992,12 @@
     }
   }, 700);
 
-  // Completa el catálogo argentino con lo que realmente cotiza hoy.
   TV.Data.discoverArgentina().then(function (added) {
     if (added) console.info('LibreCharts: ' + added + ' activos argentinos descubiertos en vivo.');
   }).catch(function () { /* sin red: queda el catálogo estático */ });
 
   window.App = {
     chart: chart, feed: feed, state: state, catalog: TV.Catalog,
-    addIndicator: addIndicator, loadSymbol: loadSymbol
+    addIndicator: addIndicator, loadSymbol: loadSymbol, showPanel: showPanel
   };
 })();
